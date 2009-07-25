@@ -326,8 +326,8 @@ class DashboardDataGrid(ReviewRequestDataGrid):
     new_updates = NewUpdatesColumn()
     my_comments = MyCommentsColumn()
 
-    def __init__(self, *args, **kwargs):
-        ReviewRequestDataGrid.__init__(self, *args, **kwargs)
+    def __init__(self, request, view=None, group=None, *args, **kwargs):
+        ReviewRequestDataGrid.__init__(self, request, *args, **kwargs)
         self.listview_template = 'datagrid/listview.html'
         self.profile_sort_field = 'sort_dashboard_columns'
         self.profile_columns_field = 'dashboard_columns'
@@ -339,8 +339,8 @@ class DashboardDataGrid(ReviewRequestDataGrid):
             "time_added", "last_updated_since"
         ]
 
-        group = self.request.GET.get('group', None)
-        view = self.request.GET.get('view', None)
+        self.group = group or self.request.GET.get('group', None)
+        self.view = view or self.request.GET.get('view', self.default_view)
         extra_query = []
 
         if view:
@@ -352,36 +352,35 @@ class DashboardDataGrid(ReviewRequestDataGrid):
         self.extra_context['extra_query'] = "&".join(extra_query)
 
     def load_extra_state(self, profile):
-        group = self.request.GET.get('group', '')
-        view = self.request.GET.get('view', self.default_view)
         user = self.request.user
 
-        if view == 'outgoing':
+        if self.view == 'outgoing':
             self.queryset = ReviewRequest.objects.from_user(user.username,
                                                             user,
                                                             with_counts=True)
             self.title = _(u"All Outgoing Review Requests")
-        elif view == 'mine':
+        elif self.view == 'mine':
             self.queryset = ReviewRequest.objects.from_user(user.username, user,
                                                             None,
                                                             with_counts=True)
             self.title = _(u"All My Review Requests")
-        elif view == 'to-me':
+        elif self.view == 'to-me':
             self.queryset = \
                 ReviewRequest.objects.to_user_directly(user.username, user,
                                                        with_counts=True)
             self.title = _(u"Incoming Review Requests to Me")
-        elif view == 'to-group':
-            if group != "":
-                self.queryset = ReviewRequest.objects.to_group(group, user,
-                                                               with_counts=True)
-                self.title = _(u"Incoming Review Requests to %s") % group
+        elif self.view == 'to-group':
+            if self.group:
+                self.queryset = \
+                    ReviewRequest.objects.to_group(self.group, user,
+                                                   with_counts=True)
+                self.title = _(u"Incoming Review Requests to %s") % self.group
             else:
                 self.queryset = \
                     ReviewRequest.objects.to_user_groups(user.username, user,
                                                          with_counts=True)
                 self.title = _(u"All Incoming Review Requests to My Groups")
-        elif view == 'starred':
+        elif self.view == 'starred':
             profile = user.get_profile()
             self.queryset = \
                 profile.starred_review_requests.public(user, with_counts=True)

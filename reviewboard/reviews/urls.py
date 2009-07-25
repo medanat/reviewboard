@@ -16,13 +16,16 @@ urlpatterns = patterns('reviewboard.reviews.views',
      {'template_name': 'reviews/review_draft_inline_form.html'}),
 
     # Review request diffs
-    url(r'^(?P<review_request_id>[0-9]+)/diff/$', 'diff', name="view_diff"),
+    url(r'^(?P<review_request_id>[0-9]+)/diff/$', 'diff',
+        name="view_diff"),
     url(r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/$', 'diff',
         name="view_diff_revision"),
 
-    (r'^(?P<review_request_id>[0-9]+)/diff/raw/$', 'raw_diff'),
-    (r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/raw/$',
-     'raw_diff'),
+    url(r'^(?P<review_request_id>[0-9]+)/diff/raw/$', 'raw_diff',
+        name="raw_diff"),
+    url(r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/raw/$',
+        'raw_diff',
+        name="raw_diff_revision"),
 
     (r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/fragment/(?P<filediff_id>[0-9]+)/$',
      'diff_fragment'),

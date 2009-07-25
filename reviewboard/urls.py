@@ -110,6 +110,8 @@ urlpatterns += patterns('',
         {'url': 'dashboard/'},
         name="root"),
 
+    url(r'^offline/', include('reviewboard.offline.urls')),
+
     # This must be last.
     (r'^iphone/', include('reviewboard.iphone.urls')),
 )

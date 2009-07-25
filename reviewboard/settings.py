@@ -103,6 +103,7 @@ INSTALLED_APPS = (
     'reviewboard.changedescs',
     'reviewboard.diffviewer',
     'reviewboard.iphone',
+    'reviewboard.offline',
     'reviewboard.reports',
     'reviewboard.reviews',
     'reviewboard.scmtools',

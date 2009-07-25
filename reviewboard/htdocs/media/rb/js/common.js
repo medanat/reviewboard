@@ -374,6 +374,30 @@ $(document).ready(function() {
         .text("Loading...")
         .hide()
         .appendTo("body");
+
+    console.log("Checking for Google Gears");
+    if (window.google && google.gears) {
+        console.log("Found!");
+        var localServer = google.gears.factory.create("beta.localserver");
+        var managedStore = localServer.createManagedStore("reviewboard-managed");
+        managedStore.manifestUrl = SITE_ROOT + "offline/gears-manifest/";
+        managedStore.checkForUpdate();
+
+        var resourceStore = localServer.createStore("reviewboard-resources");
+        resourceStore.capture(SITE_ROOT + "dashboard/");
+        resourceStore.capture(SITE_ROOT + "r/40/");
+        resourceStore.capture(SITE_ROOT + "r/40/diff/");
+
+        var timerId = window.setInterval(function() {
+            if (managedStore.currentVersion) {
+                window.clearInterval(timerId);
+                console.log("Documents are now available offline");
+                console.log("Stored version is %s", managedStore.currentVersion);
+            } else if (managedStore.updateStatus == 3) {
+                console.log("Error: " + managedStore.lastErrorMessage);
+            }
+        }, 500);
+    }
 });
 
 // vim: set et:sw=4:
