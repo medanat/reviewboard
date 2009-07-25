@@ -410,6 +410,11 @@ form table td {
   text-decoration: none;
 }
 
+#offline-sync-indicator {
+  cursor: pointer;
+}
+
+
 #searchbar {
   position: absolute;
   right: 0;

@@ -12,7 +12,13 @@
     var MEDIA_SERIAL = "{{MEDIA_SERIAL}}";
     var MEDIA_URL = "{{MEDIA_URL}}";
     var SITE_ROOT = "{{SITE_ROOT}}";
-    var LOGGED_IN = {% if request.user.is_authenticated %}true{% else %}false{% endif %};
+{% if request.user.is_authenticated %}
+    var GEARS_MANIFEST = "{% url gears-manifest %}";
+    var HTML5_MANIFEST = "{% url html5-manifest %}";
+    var LOGGED_IN = true;
+{% else %}
+    var LOGGED_IN = false;
+{% endif %}
 {% block jsconsts %}{% endblock %}
   </script>
   <link rel="icon" type="image/png" href="{{MEDIA_URL}}rb/images/favicon.png?{{MEDIA_SERIAL}}" />

@@ -369,6 +369,87 @@ $.fn.toggleStar = function(type, objid, default_) {
     });
 };
 
+
+$.fn.syncIndicator = function() {
+    var STATE_ONLINE = 1;
+    var STATE_OFFLINE = 2;
+    var STATE_SYNCING = 3;
+
+    var self = $(this);
+    var state = STATE_ONLINE;
+    var localServer;
+    var store;
+
+    try {
+        localServer = google.gears.factory.create("beta.localserver");
+
+        localServer.removeStore("reviewboard"); // XXX
+        store = localServer.createManagedStore("reviewboard");
+        store.manifestUrl = GEARS_MANIFEST;
+        store.oncomplete = onSyncComplete;
+        console.log(store.lastErrorMessage);
+        console.log(store.currentVersion);
+    }
+    catch (e) {
+        self.remove();
+        return $();
+    }
+
+    var stateIcon = $("<img/>")
+        .attr({
+            id: "offline-sync-indicator",
+            width: 11,
+            height: 11
+        })
+        .click(onStateIconClicked)
+        .appendTo(self);
+
+    setState(STATE_ONLINE);
+
+    return self;
+
+    function setState(newState) {
+        var iconName;
+
+        state = newState;
+
+        if (state == STATE_ONLINE) {
+            iconName = "off-connected-synced.gif";
+        }
+        else if (state == STATE_OFFLINE) {
+            iconName = "off-disconnected.gif";
+        }
+        else if (state == STATE_SYNCING) {
+            iconName = "off-connected-syncing.gif";
+            console.log("Syncing");
+            store.checkForUpdate();
+        }
+
+        stateIcon.attr("src", MEDIA_URL + "rb/images/" + iconName +
+                              "?" + MEDIA_SERIAL);
+    }
+
+    function onStateIconClicked() {
+        if (state == STATE_ONLINE) {
+            /* We're going offline. */
+            setState(STATE_SYNCING);
+        }
+        else if (state == STATE_OFFLINE) {
+            /* We're going online. */
+            setState(STATE_ONLINE);
+        }
+        else if (state == STATE_SYNCING) {
+            /* TODO: What to do here? */
+            setState(STATE_ONLINE);
+        }
+    }
+
+    function onSyncComplete(details) {
+        setState(STATE_OFFLINE);
+    }
+}
+
+
 $(document).ready(function() {
     $('<div id="activity-indicator" />')
         .text("Loading...")
@@ -378,15 +459,17 @@ $(document).ready(function() {
     console.log("Checking for Google Gears");
     if (window.google && google.gears) {
         console.log("Found!");
+        $("<li/>")
+            .append(" - ")
+            .insertAfter($("#accountnav li:first"))
+            .syncIndicator();
+        /*
         var localServer = google.gears.factory.create("beta.localserver");
         var managedStore = localServer.createManagedStore("reviewboard-managed");
-        managedStore.manifestUrl = SITE_ROOT + "offline/gears-manifest/";
+        managedStore.manifestUrl = GEARS_SITE_MANIFEST;
         managedStore.checkForUpdate();
 
         var resourceStore = localServer.createStore("reviewboard-resources");
-        resourceStore.capture(SITE_ROOT + "dashboard/");
-        resourceStore.capture(SITE_ROOT + "r/40/");
-        resourceStore.capture(SITE_ROOT + "r/40/diff/");
 
         var timerId = window.setInterval(function() {
             if (managedStore.currentVersion) {
@@ -397,6 +480,7 @@ $(document).ready(function() {
                 console.log("Error: " + managedStore.lastErrorMessage);
             }
         }, 500);
+        */
     }
 });
 
