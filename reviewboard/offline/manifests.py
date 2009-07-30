@@ -4,7 +4,7 @@ from django.utils import simplejson
 
 class GearsManifestResponse(HttpResponse):
     SUPPORTED_FIELDS = ["url", "matchQuery", "redirect", "ignoreQuery"]
-    def __init__(self, request, version, entries):
+    def __init__(self, request, version, url_prefix, entries):
         encoder = simplejson.JSONEncoder()
 
         new_entries = []
@@ -29,14 +29,17 @@ class GearsManifestResponse(HttpResponse):
 
 
 class Html5ManifestResponse(HttpResponse):
-    def __init__(self, request, version, entries):
+    def __init__(self, request, version, url_prefix, entries):
         data = [
             "CACHE MANIFEST",
             "# v%s" % version
         ]
 
         for entry in entries:
-            data.append(entry['url'])
+            if entry['url'].startswith('/'):
+                data.append(url_prefix + entry['url'])
+            else:
+                data.append(entry['url'])
 
         HttpResponse.__init__(self, "\n".join(data),
                               mimetype="text/cache-manifest")
