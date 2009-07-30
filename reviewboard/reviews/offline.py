@@ -60,7 +60,17 @@ def add_diff_viewer_urls(request, urls, metadata, review_request):
 
     for pagenum in paginator.page_range:
         urls.append({
-            "url": "%s?page=%d" % (view_diff_url, pagenum)
+            'url': '%s?page=%d' % (view_diff_url, pagenum)
+        })
+
+    for file in files:
+        urls.append({
+            'url': '%s?index=%s&%s' %
+                   (reverse("diff_fragment", args=[review_request.id,
+                                                   diffset.revision,
+                                                   file['filediff'].id]),
+                    file['index'],
+                    settings.AJAX_SERIAL),
         })
 
 
@@ -71,6 +81,36 @@ def add_screenshot_urls(request, urls, metadata, review_request):
             { 'url': screenshot.image.url },
             { 'url': screenshot.get_thumbnail_url() },
         ]
+
+
+def add_diff_comment_urls(request, urls, metadata, review_request):
+    diff_fragments = {}
+
+    for review in review_request.get_public_reviews():
+        for comment in review.comments.all():
+            if comment.interfilediff:
+                key = "%s-%s" % (comment.filediff.id, comment.interfilediff.id)
+            else:
+                key = comment.filediff.id
+
+            if key not in diff_fragments:
+                diff_fragments[key] = []
+
+            diff_fragments[key].append(str(comment.id))
+
+    for key, ids in diff_fragments.iteritems():
+        # XXX It's kinda crappy that we even have to know about the queue
+        #     name and comment_container, but it's needed to prevent
+        #     mismatched URLs. We have to be strict and match the JavaScript.
+        params = 'queue=diff_fragments&container_prefix=comment_container&' + \
+                 str(settings.AJAX_SERIAL)
+
+        urls.append({
+            'url': "%s?%s" %
+                   (reverse("comment_diff_fragments",
+                            args=[review_request.id, ",".join(ids)]),
+                    params),
+        })
 
 
 def add_review_request_urls(request, urls, metadata, review_request):
@@ -88,6 +128,7 @@ def add_review_request_urls(request, urls, metadata, review_request):
 
     add_diff_viewer_urls(request, urls, metadata, review_request)
     add_screenshot_urls(request, urls, metadata, review_request)
+    add_diff_comment_urls(request, urls, metadata, review_request)
 
 
 def add_urls_from_datagrid(urls, found_review_requests, metadata,
@@ -120,16 +161,17 @@ def add_urls_from_datagrid(urls, found_review_requests, metadata,
 
 
 def add_urls(request, urls, metadata, **kwargs):
-    urls += [
-        { 'url': reverse('dashboard') },
-        { 'url': settings.SITE_ROOT, 'redirect': reverse('dashboard') },
-    ]
-
     found_review_requests = {}
 
     metadata['syntax_highlighting'] = \
         get_enable_highlighting(request.user)
 
+
+    # Add the base Dashboard and "/" redirect.
+    urls += [
+        { 'url': reverse('dashboard') },
+        { 'url': settings.SITE_ROOT, 'redirect': reverse('dashboard') },
+    ]
 
     # Start grabbing all the review requests on the first page of each
     # datagrid.

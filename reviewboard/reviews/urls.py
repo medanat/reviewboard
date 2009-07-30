@@ -27,14 +27,16 @@ urlpatterns = patterns('reviewboard.reviews.views',
         'raw_diff',
         name="raw_diff_revision"),
 
-    (r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/fragment/(?P<filediff_id>[0-9]+)/$',
-     'diff_fragment'),
+    url(r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/fragment/(?P<filediff_id>[0-9]+)/$',
+       'diff_fragment',
+       name='diff_fragment'),
     (r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)/fragment/(?P<filediff_id>[0-9]+)/chunk/(?P<chunkindex>[0-9]+)/$',
      'diff_fragment'),
 
     # Fragments
-    (r'^(?P<review_request_id>[0-9]+)/fragments/diff-comments/(?P<comment_ids>[0-9,]+)/$',
-     'comment_diff_fragments'),
+    url(r'^(?P<review_request_id>[0-9]+)/fragments/diff-comments/(?P<comment_ids>[0-9,]+)/$',
+       'comment_diff_fragments',
+       name="comment_diff_fragments"),
 
     # Review request interdiffs
     (r'^(?P<review_request_id>[0-9]+)/diff/(?P<revision>[0-9]+)-(?P<interdiff_revision>[0-9]+)/$',

@@ -573,7 +573,7 @@ def comment_diff_fragments(
     if had_error:
         return HttpResponseServerError(page_content)
 
-    response = HttpResponse(page_content)
+    response = HttpResponse(page_content, mimetype="application/javascript")
     set_last_modified(response, comment.timestamp)
     response['Expires'] = http_date(time.time() + 60 * 60 * 24 * 365) # 1 year
     return response
