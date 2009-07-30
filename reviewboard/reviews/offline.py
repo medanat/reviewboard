@@ -35,6 +35,61 @@ def get_last_activity_timestamp(request, review_request):
     return get_latest_timestamp(timestamps)
 
 
+def add_diff_viewer_urls(request, urls, metadata, review_request):
+    try:
+        diffset = review_request.diffset_history.diffsets.latest()
+    except DiffSet.DoesNotExist:
+        return
+
+    view_diff_url = reverse("view_diff", args=[review_request.id])
+
+    urls += [
+        { 'url': view_diff_url },
+        { 'url': reverse("raw_diff", args=[review_request.id]) },
+    ]
+
+    files = get_diff_files(diffset, None, None,
+                           metadata['syntax_highlighting'], False)
+
+    # Break the list of files into pages
+    siteconfig = SiteConfiguration.objects.get_current()
+    paginator = Paginator(
+        files,
+        siteconfig.get("diffviewer_paginate_by"),
+        siteconfig.get("diffviewer_paginate_orphans"))
+
+    for pagenum in paginator.page_range:
+        urls.append({
+            "url": "%s?page=%d" % (view_diff_url, pagenum)
+        })
+
+
+def add_screenshot_urls(request, urls, metadata, review_request):
+    for screenshot in review_request.screenshots.all():
+        urls += [
+            { 'url': screenshot.get_absolute_url() },
+            { 'url': screenshot.image.url },
+            { 'url': screenshot.get_thumbnail_url() },
+        ]
+
+
+def add_review_request_urls(request, urls, metadata, review_request):
+    # Grab the latest activity timestamp.
+    # TODO: Make this common between here and review_detail.
+    timestamp = get_last_activity_timestamp(request, review_request)
+
+    if (not metadata['latest_timestamp'] or
+        timestamp > metadata['latest_timestamp']):
+        metadata['latest_timestamp'] = timestamp
+
+    urls.append({
+        'url': review_request.get_absolute_url(),
+    })
+
+    add_diff_viewer_urls(request, urls, metadata, review_request)
+    add_screenshot_urls(request, urls, metadata, review_request)
+
+
 def add_urls_from_datagrid(urls, found_review_requests, metadata,
                            datagrid, view, group=None):
     datagrid.load_state()
@@ -53,72 +108,28 @@ def add_urls_from_datagrid(urls, found_review_requests, metadata,
         },
     })
 
-    highlighting = get_enable_highlighting(datagrid.request.user)
-
     for obj_info in datagrid.rows:
         review_request = obj_info['object']
         assert isinstance(review_request, ReviewRequest)
 
-        if review_request.id in found_review_requests:
-            continue
+        if review_request.id not in found_review_requests:
+            found_review_requests[review_request.id] = True
 
-        found_review_requests[review_request.id] = True
-
-        # Grab the latest activity timestamp.
-        # TODO: Make this common between here and review_detail.
-        timestamp = get_last_activity_timestamp(datagrid.request,
-                                                review_request)
-
-        if (not metadata['latest_timestamp'] or
-            timestamp > metadata['latest_timestamp']):
-            metadata['latest_timestamp'] = timestamp
-
-        urls.append({
-            'url': review_request.get_absolute_url(),
-        })
-
-        try:
-            diffset = review_request.diffset_history.diffsets.latest()
-
-            view_diff_url = reverse("view_diff", args=[review_request.id])
-
-            urls += [
-                { 'url': view_diff_url },
-                { 'url': reverse("raw_diff", args=[review_request.id]) },
-            ]
-
-            files = get_diff_files(diffset, None, None, highlighting,
-                                   False)
-
-            # Break the list of files into pages
-            siteconfig = SiteConfiguration.objects.get_current()
-            paginator = Paginator(
-                files,
-                siteconfig.get("diffviewer_paginate_by"),
-                siteconfig.get("diffviewer_paginate_orphans"))
-
-            for pagenum in paginator.page_range:
-                urls.append({
-                    "url": "%s?page=%d" % (view_diff_url, pagenum)
-                })
-        except DiffSet.DoesNotExist:
-            pass
-
-        for screenshot in review_request.screenshots.all():
-            urls += [
-                { 'url': screenshot.get_absolute_url() },
-                { 'url': screenshot.image.url },
-                { 'url': screenshot.get_thumbnail_url() },
-            ]
+            add_review_request_urls(datagrid.request, urls, metadata,
+                                    review_request)
 
 
-def add_review_request_urls(request, urls, metadata, **kwargs):
+def add_urls(request, urls, metadata, **kwargs):
     urls += [
         { 'url': reverse('dashboard') },
         { 'url': settings.SITE_ROOT, 'redirect': reverse('dashboard') },
     ]
 
     found_review_requests = {}
+
+    metadata['syntax_highlighting'] = \
+        get_enable_highlighting(request.user)
+
 
     # Start grabbing all the review requests on the first page of each
     # datagrid.
@@ -138,4 +149,4 @@ def add_review_request_urls(request, urls, metadata, **kwargs):
                                datagrid, "to-group", review_group.name)
 
 
-adding_manifest_urls.connect(add_review_request_urls)
+adding_manifest_urls.connect(add_urls)
