@@ -150,6 +150,22 @@ function rbApiCall(options) {
     }
 }
 
+function getGoogleGearsAllowed() {
+    if (!google.gears.factory.hasPermission) {
+        var siteName = "Review Board";
+        var icon = MEDIA_URL + "rb/images/logo.png?" + MEDIA_SERIAL;
+        var msg = "Review Board would like to use Google Gears to " +
+                  "provide enhanced capabilities, including offline " +
+                  "support.";
+
+        if (!google.gears.factory.getPermission(siteName, icon, msg)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 
 /*
  * Creates a form dialog based on serialized form field data.
@@ -377,23 +393,8 @@ $.fn.syncIndicator = function() {
 
     var self = $(this);
     var state = STATE_ONLINE;
-    var localServer;
-    var store;
-
-    try {
-        localServer = google.gears.factory.create("beta.localserver");
-
-        localServer.removeStore("reviewboard"); // XXX
-        store = localServer.createManagedStore("reviewboard");
-        store.manifestUrl = GEARS_MANIFEST;
-        store.oncomplete = onSyncComplete;
-        console.log(store.lastErrorMessage);
-        console.log(store.currentVersion);
-    }
-    catch (e) {
-        self.remove();
-        return $();
-    }
+    var localServer = null;
+    var store = null;
 
     var stateIcon = $("<img/>")
         .attr({
@@ -430,6 +431,10 @@ $.fn.syncIndicator = function() {
     }
 
     function onStateIconClicked() {
+        if (localServer == null && !createServer()) {
+            return;
+        }
+
         if (state == STATE_ONLINE) {
             /* We're going offline. */
             setState(STATE_SYNCING);
@@ -441,6 +446,30 @@ $.fn.syncIndicator = function() {
         else if (state == STATE_SYNCING) {
             /* TODO: What to do here? */
             setState(STATE_ONLINE);
+        }
+    }
+
+    function createServer() {
+        if (localServer != null) {
+            return true;
+        }
+
+        if (!getGoogleGearsAllowed()) {
+            return false;
+        }
+
+        try {
+            localServer = google.gears.factory.create("beta.localserver");
+
+            store = localServer.createManagedStore("reviewboard");
+            store.manifestUrl = GEARS_MANIFEST;
+            store.oncomplete = onSyncComplete;
+            console.log(store.lastErrorMessage);
+            console.log(store.currentVersion);
+        }
+        catch (e) {
+            self.remove();
+            return;
         }
     }
 
