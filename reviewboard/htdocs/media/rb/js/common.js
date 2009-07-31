@@ -423,7 +423,6 @@ $.fn.syncIndicator = function() {
         else if (state == STATE_SYNCING) {
             iconName = "off-connected-syncing.gif";
             console.log("Syncing");
-            store.checkForUpdate();
         }
 
         stateIcon.attr("src", MEDIA_URL + "rb/images/" + iconName +
@@ -438,10 +437,13 @@ $.fn.syncIndicator = function() {
         if (state == STATE_ONLINE) {
             /* We're going offline. */
             setState(STATE_SYNCING);
+            store.checkForUpdate();
+            store.enabled = true;
         }
         else if (state == STATE_OFFLINE) {
             /* We're going online. */
             setState(STATE_ONLINE);
+            store.enabled = false;
         }
         else if (state == STATE_SYNCING) {
             /* TODO: What to do here? */
@@ -462,15 +464,18 @@ $.fn.syncIndicator = function() {
             localServer = google.gears.factory.create("beta.localserver");
 
             store = localServer.createManagedStore("reviewboard");
+            store.enabled = false;
             store.manifestUrl = GEARS_MANIFEST;
             store.oncomplete = onSyncComplete;
             console.log(store.lastErrorMessage);
             console.log(store.currentVersion);
         }
         catch (e) {
-            self.remove();
-            return;
+            //self.remove();
+            return false;
         }
+
+        return true;
     }
 
     function onSyncComplete(details) {
@@ -485,31 +490,11 @@ $(document).ready(function() {
         .hide()
         .appendTo("body");
 
-    console.log("Checking for Google Gears");
     if (window.google && google.gears) {
-        console.log("Found!");
         $("<li/>")
             .append(" - ")
             .insertAfter($("#accountnav li:first"))
             .syncIndicator();
-        /*
-        var localServer = google.gears.factory.create("beta.localserver");
-        var managedStore = localServer.createManagedStore("reviewboard-managed");
-        managedStore.manifestUrl = GEARS_SITE_MANIFEST;
-        managedStore.checkForUpdate();
-
-        var resourceStore = localServer.createStore("reviewboard-resources");
-
-        var timerId = window.setInterval(function() {
-            if (managedStore.currentVersion) {
-                window.clearInterval(timerId);
-                console.log("Documents are now available offline");
-                console.log("Stored version is %s", managedStore.currentVersion);
-            } else if (managedStore.updateStatus == 3) {
-                console.log("Error: " + managedStore.lastErrorMessage);
-            }
-        }, 500);
-        */
     }
 });
 
