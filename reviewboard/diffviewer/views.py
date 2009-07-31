@@ -3,13 +3,15 @@ import traceback
 
 from django.conf import settings
 from django.core.paginator import Paginator
-from django.http import HttpResponse, HttpResponseServerError
+from django.http import HttpResponse, HttpResponseServerError, \
+                        HttpResponseNotModified
 from django.shortcuts import get_object_or_404, render_to_response
 from django.template import RequestContext
 from django.template.loader import render_to_string
 from django.utils.translation import ugettext as _
 
 from djblets.siteconfig.models import SiteConfiguration
+from djblets.util.http import set_etag, etag_if_none_match
 from djblets.util.misc import cache_memoize, get_object_or_none
 
 from reviewboard.diffviewer.models import DiffSet, FileDiff
@@ -209,6 +211,19 @@ def view_diff_fragment(
     else:
         collapseall = get_collapse_diff(request)
 
+    etag = ""
+
+    if collapseall:
+        etag += "collapseall-"
+
+    if highlighting:
+        etag += "highlighting-"
+
+    etag += str(settings.AJAX_SERIAL)
+
+    if etag_if_none_match(request, etag):
+        return HttpResponseNotModified()
+
     try:
         file = get_requested_diff_file()
 
@@ -217,10 +232,12 @@ def view_diff_fragment(
                 'standalone': chunkindex is not None,
             }
 
-            return HttpResponse(build_diff_fragment(request, file,
-                                                    chunkindex,
-                                                    highlighting, collapseall,
-                                                    context, template_name))
+            response = HttpResponse(
+                build_diff_fragment(request, file, chunkindex,
+                                    highlighting, collapseall,
+                                    context, template_name))
+            set_etag(response, etag)
+            return response
         raise UserVisibleError(
             _(u"Internal error. Unable to locate file record for filediff %s") % \
             filediff.id)
