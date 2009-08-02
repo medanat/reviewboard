@@ -16,17 +16,11 @@ RB.Offline = {
     totalURLs: 0,
 
     /* Callbacks */
-    onStateChanged: function(state) {
-        console.log("State changed to %s", state);
-    },
-    onProgress: function(filesComplete, filesTotal) {
-        console.log("%s% complete (%s/%s)",
-                    (filesComplete / filesTotal) * 100,
-                    filesComplete, filesTotal);
-    },
+    onStateChanged: function(state) {},
+    onProgress: function(filesComplete, filesTotal) {},
 
     init: function() {
-        this.state = this.STATE_ONLINE;
+        this._updateState(this.STATE_ONLINE);
 
         if (window.google && google.gears) {
             this.backend = RB.Offline.Gears;
@@ -118,7 +112,7 @@ RB.Offline = {
     _captureFiles: function() {
         /* Once we have the list of URLs, begin downloading. */
         var self = this;
-        self._updateState(self.SYNCING);
+        self._updateState(self.STATE_SYNCING);
         self.onProgress(0, self.totalURLs);
 
         self._downloadNextFile();

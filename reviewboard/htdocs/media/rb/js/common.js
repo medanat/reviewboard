@@ -387,14 +387,7 @@ $.fn.toggleStar = function(type, objid, default_) {
 
 
 $.fn.syncIndicator = function() {
-    var STATE_ONLINE = 1;
-    var STATE_OFFLINE = 2;
-    var STATE_SYNCING = 3;
-
     var self = $(this);
-    var state = STATE_ONLINE;
-    var localServer = null;
-    var store = null;
 
     var stateIcon = $("<img/>")
         .attr({
@@ -402,89 +395,43 @@ $.fn.syncIndicator = function() {
             width: 11,
             height: 11
         })
-        .click(onStateIconClicked)
+        .click(function() {
+            var state = RB.Offline.state;
+
+            if (state == RB.Offline.STATE_ONLINE) {
+                RB.Offline.goOffline();
+            }
+            else {
+                RB.Offline.goOnline();
+            }
+        })
         .appendTo(self);
 
-    setState(STATE_ONLINE);
-
-    RB.Offline.init();
-
-    return self;
-
-    function setState(newState) {
+    RB.Offline.onStateChanged = function(state) {
         var iconName;
 
-        state = newState;
-
-        if (state == STATE_ONLINE) {
+        if (state == RB.Offline.STATE_ONLINE) {
             iconName = "off-connected-synced.gif";
         }
-        else if (state == STATE_OFFLINE) {
+        else if (state == RB.Offline.STATE_OFFLINE) {
             iconName = "off-disconnected.gif";
         }
-        else if (state == STATE_SYNCING) {
+        else if (state == RB.Offline.STATE_SYNCING ||
+                 state == RB.Offline.STATE_CALC_SYNC) {
             iconName = "off-connected-syncing.gif";
-            console.log("Syncing");
         }
 
         stateIcon.attr("src", MEDIA_URL + "rb/images/" + iconName +
                               "?" + MEDIA_SERIAL);
     }
 
-    function onStateIconClicked() {
-        if (localServer == null && !createServer()) {
-            return;
-        }
+    RB.Offline.onProgress = function(curFiles, totalFiles) {
 
-        if (state == STATE_ONLINE) {
-            /* We're going offline. */
-            setState(STATE_SYNCING);
-            RB.Offline.goOffline();
-            //store.checkForUpdate();
-            //store.enabled = true;
-        }
-        else if (state == STATE_OFFLINE) {
-            /* We're going online. */
-            setState(STATE_ONLINE);
-            //store.enabled = false;
-        }
-        else if (state == STATE_SYNCING) {
-            /* TODO: What to do here? */
-            setState(STATE_ONLINE);
-        }
     }
 
-    function createServer() {
-        return true;
-        if (localServer != null) {
-            return true;
-        }
+    RB.Offline.init();
 
-        if (!getGoogleGearsAllowed()) {
-            return false;
-        }
-
-        try {
-            localServer = google.gears.factory.create("beta.localserver");
-
-            store = localServer.createManagedStore("reviewboard");
-            store.enabled = false;
-            store.manifestUrl = GEARS_MANIFEST;
-            store.oncomplete = onSyncComplete;
-            console.log(store.lastErrorMessage);
-            console.log(store.currentVersion);
-        }
-        catch (e) {
-            //self.remove();
-            return false;
-        }
-
-        return true;
-    }
-
-    function onSyncComplete(details) {
-        setState(STATE_OFFLINE);
-    }
+    return self;
 }
 
 
