@@ -131,6 +131,8 @@ def get_datagrids(request):
 
 
 def get_review_requests_from_datagrids(request):
+    review_requests = set()
+
     for datagrid in get_datagrids(request):
         datagrid.profile_columns_field = None
         datagrid.default_columns = ["summary"]
@@ -140,7 +142,9 @@ def get_review_requests_from_datagrids(request):
             review_request = obj_info['object']
             assert isinstance(review_request, ReviewRequest)
 
-            yield review_request
+            review_requests.add(review_request)
+
+    return review_requests
 
 
 def add_urls(request, urls, metadata, **kwargs):
