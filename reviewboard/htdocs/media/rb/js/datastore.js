@@ -20,17 +20,23 @@ RB.Offline = {
     onProgress: function(filesComplete, filesTotal) {},
 
     init: function() {
-        this._updateState(this.STATE_ONLINE);
-
         if (window.google && google.gears) {
             this.backend = RB.Offline.Gears;
         } else {
             // TODO: HTML 5
         }
+
+        this._updateState(this.isOffline()
+                          ? this.STATE_OFFLINE
+                          : this.STATE_ONLINE)
     },
 
     offlineSupported: function() {
         return this.backend != null;
+    },
+
+    isOffline: function() {
+        return this.offlineSupported && this.backend.isOffline();
     },
 
     checkPermission: function() {
@@ -173,6 +179,12 @@ RB.Offline.Gears = {
             console.log(e);
             return false;
         }
+    },
+
+    isOffline: function() {
+        return google.gears.factory.hasPermission &&
+               (this.store != null || this.setupServer()) &&
+               this.store.enabled;
     },
 
     checkPermission: function() {
