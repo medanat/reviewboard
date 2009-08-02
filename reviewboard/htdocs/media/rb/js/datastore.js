@@ -123,10 +123,14 @@ RB.Offline = {
         $.funcQueue("offline").start();
     },
 
-    _switchOffline: function() {
-        this._updateState(this.STATE_OFFLINE);
-        this.backend.setLookupsEnabled(true);
-    },
+	_preprocessManifest: function(manifest) {
+		/* Determine if we need to load this manifest. */
+		var needManifest = true; // TODO
+
+		if (needManifest) {
+            this.pendingURLs = this.pendingURLs.concat(manifest.urls);
+		}
+	}
 
     _captureFiles: function() {
         /* Once we have the list of URLs, begin downloading. */
@@ -167,14 +171,10 @@ RB.Offline = {
         });
     },
 
-	_preprocessManifest: function(manifest) {
-		/* Determine if we need to load this manifest. */
-		var needManifest = true; // TODO
-
-		if (needManifest) {
-            this.pendingURLs = this.pendingURLs.concat(manifest.urls);
-		}
-	}
+    _switchOffline: function() {
+        this._updateState(this.STATE_OFFLINE);
+        this.backend.setLookupsEnabled(true);
+    },
 };
 
 RB.Offline.Gears = {
