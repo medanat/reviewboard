@@ -19,6 +19,8 @@ RB.Offline = {
     onProgress: function(filesComplete, filesTotal) {},
 
     init: function() {
+        var self = this;
+
         if (window.google && google.gears) {
             this.backend = RB.Offline.Gears;
         } else {
@@ -28,14 +30,27 @@ RB.Offline = {
         this._updateState(this.isOffline()
                           ? this.STATE_OFFLINE
                           : this.STATE_ONLINE)
+
+        $(window)
+            .bind("offline", function() { self.goOffline(); })
+            .bind("online", function() { self.goOnline(); });
     },
 
     offlineSupported: function() {
         return this.backend != null;
     },
 
+    canGoOnline: function() {
+        /*
+         * NOTE: Older browsers don't have navigator.onLine, so this will
+         *       be 'undefined'. Check explicitly against false.
+         */
+        return navigator.onLine != false;
+    },
+
     isOffline: function() {
-        return this.offlineSupported && this.backend.isOffline();
+        return this.offlineSupported &&
+               (this.backend.isOffline() || !this.canGoOnline());
     },
 
     checkPermission: function() {
@@ -47,24 +62,23 @@ RB.Offline = {
     },
 
     goOnline: function() {
-        if (this.state != this.STATE_ONLINE) {
+        if (this.state != this.STATE_ONLINE && this.canGoOnline()) {
             this._updateState(this.STATE_ONLINE);
             this.backend.setLookupsEnabled(false);
         }
     },
 
     goOffline: function() {
-        console.log("1");
-        console.log(this.state);
-        if (this.state == this.STATE_ONLINE && this.offlineSupported()) {
-            console.log("2");
+        if (!this.isOffline()) {
             this.synchronize();
+        } else {
+            /* The browser is already offline. Tell it to use the cache. */
+            this._switchOffline();
         }
     },
 
     synchronize: function() {
         if (!this.checkPermission()) {
-            console.log("No permission");
             return;
         }
 
@@ -73,7 +87,6 @@ RB.Offline = {
 
         this._updateState(this.STATE_CALC_SYNC);
 
-        console.log("synchronizing");
         $.getJSON(SITE_ROOT + "offline/manifests/", function(manifestsList) {
             self._loadManifestsList(manifestsList);
         });
@@ -103,13 +116,16 @@ RB.Offline = {
         });
 
         $.funcQueue("offline").add(function() {
-            self._updateState(self.STATE_OFFLINE);
-            self.backend.setLookupsEnabled(true);
-
             /* And we're done. */
+            self._switchOffline();
         });
 
         $.funcQueue("offline").start();
+    },
+
+    _switchOffline: function() {
+        this._updateState(this.STATE_OFFLINE);
+        this.backend.setLookupsEnabled(true);
     },
 
     _captureFiles: function() {
@@ -172,7 +188,6 @@ RB.Offline.Gears = {
             return true;
         }
         catch (e) {
-            console.log(e);
             return false;
         }
     },
