@@ -407,26 +407,116 @@ $.fn.syncIndicator = function() {
         })
         .appendTo(self);
 
+    var statusBox = $("<div/>")
+        .attr("id", "offline-sync-statusbox")
+        .hide()
+        .appendTo(document.body);
+
+    var statusLabel = $("<p/>")
+        .text("XXX")
+        .appendTo(statusBox);
+
+    var progressBar = $("<div/>")
+        .progressbar()
+        .hide()
+        .appendTo(statusBox);
+
+    var cancelLink = $('<a href="#"/>')
+        .text("Cancel")
+        .hide()
+        .click(function() {
+            RB.Offline.goOnline();
+            return false;
+        })
+        .appendTo(statusBox);
+
+    $(window)
+        .bind("resize.offlineStatusBox", function() {
+            statusBox.css("left", stateIcon.offset().left);
+        })
+        .triggerHandler("resize.offlineStatusBox");
+
+    var prevState = null;
+
+    /* Hook into the offline support. */
     RB.Offline.onStateChanged = function(state) {
         var iconName;
+        var showBox = false;
+        var hideBox = false;
 
         if (state == RB.Offline.STATE_ONLINE) {
             iconName = "off-connected-synced.gif";
+            statusLabel.text("You are online.");
+
+            if (prevState != null) {
+                progressBar.hide();
+                cancelLink.hide();
+                showBox = true;
+                hideBox = true;
+            }
         }
         else if (state == RB.Offline.STATE_OFFLINE) {
             iconName = "off-disconnected.gif";
+            statusLabel.text("You are now in offline mode.");
+            hideBox = true;
+            progressBar.hide();
+            cancelLink.hide();
         }
-        else if (state == RB.Offline.STATE_SYNCING ||
-                 state == RB.Offline.STATE_CALC_SYNC) {
+        else if (state == RB.Offline.STATE_CALC_SYNC) {
             iconName = "off-connected-syncing.gif";
+            statusLabel.text("Preparing to download files...");
+            showBox = true;
+            progressBar.show();
+            cancelLink.show();
+        }
+        else if (state == RB.Offline.STATE_SYNCING) {
+            iconName = "off-connected-syncing.gif";
+            statusLabel.text("Download files...");
+        }
+
+        if (showBox) {
+            var stateIconOffset = stateIcon.offset();
+
+            statusBox
+                .css({
+                    opacity: 0,
+                    left: stateIconOffset.left,
+                    top: stateIconOffset.top + stateIcon.height() - 10
+                })
+                .show()
+                .animate({
+                    top: "+=10px",
+                    opacity: 1
+                }, 350, "swing")
+        }
+
+        if (hideBox) {
+            statusBox
+                .delay(1000)
+                .animate({
+                    top: "-=10px",
+                    opacity: 0
+                }, 350, "swing")
         }
 
         stateIcon.attr("src", MEDIA_URL + "rb/images/" + iconName +
                               "?" + MEDIA_SERIAL);
+
+        prevState = state;
     }
 
     RB.Offline.onProgress = function(curFiles, totalFiles) {
+        var pct = curFiles / totalFiles * 100;
 
+        if (pct == 100) {
+            statusLabel.text("Download complete.");
+        }
+        else {
+            statusLabel.text("Downloading file " + (curFiles + 1) + " of " +
+                             totalFiles);
+        }
+
+        progressBar.progressbar("value", curFiles / totalFiles * 100);
     }
 
     RB.Offline.init();
