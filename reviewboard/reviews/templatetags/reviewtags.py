@@ -522,4 +522,5 @@ def render_star(user, obj):
         'starred': int(starred),
         'user': user,
         'MEDIA_URL': settings.MEDIA_URL,
+        'MEDIA_SERIAL': settings.MEDIA_SERIAL,
     })
