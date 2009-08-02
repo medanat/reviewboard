@@ -36,9 +36,13 @@ def get_media_urls():
 
                         path = os.path.relpath(os.path.join(root, name),
                                                settings.MEDIA_ROOT)
+                        filename = media_prefix + path
+
                         paths.append({
-                            'url': '%s%s?%s' % (media_prefix, path,
-                                                settings.MEDIA_SERIAL)
+                            'url': '%s?%s' % (filename, settings.MEDIA_SERIAL),
+                            'aliases': [
+                                filename,
+                            ],
                         })
 
         return paths

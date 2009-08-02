@@ -12,7 +12,6 @@ RB.Offline = {
     backend: null,
 
     pendingURLs: [],
-    pendingRedirects: [],
     totalURLs: 0,
 
     /* Callbacks */
@@ -70,9 +69,7 @@ RB.Offline = {
         }
 
         var self = this;
-
         this.pendingURLs = [];
-        this.pendingRedirects = [];
 
         this._updateState(this.STATE_CALC_SYNC);
 
@@ -133,10 +130,16 @@ RB.Offline = {
             return;
         }
 
-        var url = self.pendingURLs.shift();
+        var url_item = self.pendingURLs.shift();
 
-        this.backend.capture(url, function(url, success) {
+        this.backend.capture(url_item['url'], function(url, success) {
             if (success) {
+                if (url_item['aliases']) {
+                    $.each(url_item['aliases'], function(i, alias) {
+                        self.backend.aliasURL(url_item['url'], alias);
+                    });
+                }
+
                 self.onProgress(self.totalURLs - self.pendingURLs.length,
                                 self.totalURLs);
                 self._downloadNextFile();
@@ -151,16 +154,9 @@ RB.Offline = {
 	_preprocessManifest: function(manifest) {
 		/* Determine if we need to load this manifest. */
 		var needManifest = true; // TODO
-        var self = this;
 
 		if (needManifest) {
-			$.each(manifest.urls, function(i, item) {
-				if (item['redirect']) {
-					self.pendingRedirects.append(item)
-				} else {
-					self.pendingURLs.push(item['url'])
-				}
-			});
+            this.pendingURLs = this.pendingURLs.concat(manifest.urls);
 		}
 	}
 };
@@ -205,6 +201,10 @@ RB.Offline.Gears = {
 
     capture: function(url, onDone) {
         this.store.capture(url, onDone);
+    },
+
+    aliasURL: function(url, alias) {
+        this.store.copy(url, alias);
     }
 };
 
