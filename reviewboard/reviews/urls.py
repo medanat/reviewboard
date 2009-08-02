@@ -10,6 +10,10 @@ urlpatterns = patterns('reviewboard.reviews.views',
     url(r'^(?P<review_request_id>[0-9]+)/$', 'review_detail',
         name="review-request-detail"),
 
+    # Review request offline manifest
+    url(r'^(?P<review_request_id>[0-9]+)/manifest/$', 'offline_manifest',
+        name="review-request-manifest"),
+
     # Reviews
     (r'^(?P<review_request_id>[0-9]+)/reviews/draft/inline-form/$',
      'review_draft_inline_form',

@@ -5,6 +5,11 @@ from reviewboard.offline.manifests import GearsManifestResponse, \
 
 
 urlpatterns = patterns('reviewboard.offline.views',
+    url(r'^manifests/$', 'manifests',
+        name="manifests"),
+    url(r'^media-manifest/$', 'media_manifest',
+        name="media-manifest"),
+
     # Google Gears
     url(r'^gears/manifest/$', 'manifest',
         {'manifest_class': GearsManifestResponse},

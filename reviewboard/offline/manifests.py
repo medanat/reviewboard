@@ -43,3 +43,18 @@ class Html5ManifestResponse(HttpResponse):
 
         HttpResponse.__init__(self, "\n".join(data),
                               mimetype="text/cache-manifest")
+
+
+class ManifestResponse(HttpResponse):
+    def __init__(self, request, urls, version=None):
+        encoder = simplejson.JSONEncoder()
+
+        data = {
+            'urls': list(urls),
+        }
+
+        if version:
+            data['version'] = version
+
+        HttpResponse.__init__(self, encoder.encode(data),
+                              mimetype="application/json")

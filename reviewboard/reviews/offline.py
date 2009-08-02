@@ -12,30 +12,7 @@ from reviewboard.reviews.datagrids import DashboardDataGrid
 from reviewboard.reviews.models import ReviewRequest, Review
 
 
-def get_last_activity_timestamp(request, review_request):
-    review_timestamp = 0
-
-    if request.user.is_authenticated():
-        try:
-            last_draft_review = Review.objects.filter(
-                review_request=review_request,
-                user=request.user,
-                public=False).latest()
-            review_timestamp = last_draft_review.timestamp
-        except Review.DoesNotExist:
-            pass
-
-    # Find out if we can bail early. Generate an ETag for this.
-    timestamps = [review_request.last_updated]
-    draft = review_request.get_draft()
-
-    if draft:
-        timestamps.append(draft.last_updated)
-
-    return get_latest_timestamp(timestamps)
-
-
-def add_diff_viewer_urls(request, urls, metadata, review_request):
+def get_diff_viewer_urls(request, review_request):
     try:
         diffset = review_request.diffset_history.diffsets.latest()
     except DiffSet.DoesNotExist:
@@ -43,47 +20,41 @@ def add_diff_viewer_urls(request, urls, metadata, review_request):
 
     view_diff_url = reverse("view_diff", args=[review_request.id])
 
-    urls += [
-        { 'url': view_diff_url },
-        { 'url': reverse("raw_diff", args=[review_request.id]) },
-    ]
+    yield { 'url': view_diff_url }
+    yield { 'url': reverse("raw_diff", args=[review_request.id]) }
 
     files = get_diff_files(diffset, None, None,
-                           metadata['syntax_highlighting'], False)
+                           get_enable_highlighting(request.user),
+                           False)
 
     # Break the list of files into pages
     siteconfig = SiteConfiguration.objects.get_current()
-    paginator = Paginator(
-        files,
-        siteconfig.get("diffviewer_paginate_by"),
-        siteconfig.get("diffviewer_paginate_orphans"))
+    paginator = Paginator(files,
+                          siteconfig.get("diffviewer_paginate_by"),
+                          siteconfig.get("diffviewer_paginate_orphans"))
 
     for pagenum in paginator.page_range:
-        urls.append({
-            'url': '%s?page=%d' % (view_diff_url, pagenum)
-        })
+        yield { 'url': '%s?page=%d' % (view_diff_url, pagenum)}
 
     for file in files:
-        urls.append({
-            'url': '%s?index=%s&%s' %
+        yield {
+            'url': '%s?index=%s&%s' % \
                    (reverse("diff_fragment", args=[review_request.id,
                                                    diffset.revision,
                                                    file['filediff'].id]),
                     file['index'],
-                    settings.AJAX_SERIAL),
-        })
+                    settings.AJAX_SERIAL)
+        }
 
 
-def add_screenshot_urls(request, urls, metadata, review_request):
+def get_screenshot_urls(review_request):
     for screenshot in review_request.screenshots.all():
-        urls += [
-            { 'url': screenshot.get_absolute_url() },
-            { 'url': screenshot.image.url },
-            { 'url': screenshot.get_thumbnail_url() },
-        ]
+        yield { 'url': screenshot.get_absolute_url() }
+        yield { 'url': screenshot.image.url }
+        yield { 'url': screenshot.get_thumbnail_url() }
 
 
-def add_diff_comment_urls(request, urls, metadata, review_request):
+def get_diff_comment_urls(review_request):
     diff_fragments = {}
 
     for review in review_request.get_public_reviews():
@@ -105,36 +76,24 @@ def add_diff_comment_urls(request, urls, metadata, review_request):
         params = 'queue=diff_fragments&container_prefix=comment_container&' + \
                  str(settings.AJAX_SERIAL)
 
-        urls.append({
-            'url': "%s?%s" %
-                   (reverse("comment_diff_fragments",
-                            args=[review_request.id, ",".join(ids)]),
-                    params),
-        })
+        yield {
+            'url': "%s?%s" % (reverse("comment_diff_fragments",
+                                      args=[review_request.id, ",".join(ids)]),
+                              params)
+        }
 
 
-def add_review_request_urls(request, urls, metadata, review_request):
-    # Grab the latest activity timestamp.
-    # TODO: Make this common between here and review_detail.
-    timestamp = get_last_activity_timestamp(request, review_request)
+def get_review_request_urls(request, review_request):
+    urls = [{ 'url': review_request.get_absolute_url() }]
+    urls.extend(get_diff_viewer_urls(request, review_request))
+    urls.extend(get_screenshot_urls(review_request))
+    urls.extend(get_diff_comment_urls(review_request))
 
-    if (not metadata['latest_timestamp'] or
-        timestamp > metadata['latest_timestamp']):
-        metadata['latest_timestamp'] = timestamp
-
-    urls.append({
-        'url': review_request.get_absolute_url(),
-    })
-
-    add_diff_viewer_urls(request, urls, metadata, review_request)
-    add_screenshot_urls(request, urls, metadata, review_request)
-    add_diff_comment_urls(request, urls, metadata, review_request)
+    return urls
 
 
 def add_urls_from_datagrid(urls, found_review_requests, metadata,
                            datagrid, view, group=None):
-    datagrid.load_state()
-
     datagrid_params = "view=%s" % view
 
     if group:
@@ -158,6 +117,30 @@ def add_urls_from_datagrid(urls, found_review_requests, metadata,
 
             add_review_request_urls(datagrid.request, urls, metadata,
                                     review_request)
+
+
+def get_datagrids(request):
+    for view in ["incoming", "to-me", "starred"]:
+        datagrid = DashboardDataGrid(request, view=view)
+        yield datagrid
+
+    for review_group in request.user.review_groups.all():
+        datagrid = DashboardDataGrid(request, view="to-group",
+                                     group=review_group.name)
+        yield datagrid
+
+
+def get_review_requests_from_datagrids(request):
+    for datagrid in get_datagrids(request):
+        datagrid.profile_columns_field = None
+        datagrid.default_columns = ["summary"]
+        datagrid.load_state()
+
+        for obj_info in datagrid.rows:
+            review_request = obj_info['object']
+            assert isinstance(review_request, ReviewRequest)
+
+            yield review_request
 
 
 def add_urls(request, urls, metadata, **kwargs):
@@ -191,4 +174,16 @@ def add_urls(request, urls, metadata, **kwargs):
                                datagrid, "to-group", review_group.name)
 
 
-adding_manifest_urls.connect(add_urls)
+def add_manifest_urls(request, urls, **kwargs):
+    #urls.append({
+    #    'url': reverse('dashboard-manifest'),
+    #})
+
+    for review_request in get_review_requests_from_datagrids(request):
+        urls.append({
+            'url': reverse("review-request-manifest",
+                           args=[review_request.id])
+        })
+
+
+adding_manifest_urls.connect(add_manifest_urls)

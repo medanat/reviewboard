@@ -4,9 +4,11 @@ from time import mktime
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
 from django.contrib.sites.models import Site
+from django.core.urlresolvers import reverse
 from djblets.siteconfig.models import SiteConfiguration
 from djblets.util.misc import cache_memoize
 
+from reviewboard.offline.manifests import ManifestResponse
 from reviewboard.offline.signals import adding_manifest_urls
 
 
@@ -34,13 +36,9 @@ def get_media_urls():
 
                         path = os.path.relpath(os.path.join(root, name),
                                                settings.MEDIA_ROOT)
-                        paths.append({
-                            "url": "%s%s?%s" % (media_prefix, path,
-                                                settings.MEDIA_SERIAL),
-                            "matchQuery": {
-                                "hasAll": str(settings.MEDIA_SERIAL),
-                            },
-                        })
+                        paths.append("url",
+                                     "%s%s?%s" % (media_prefix, path,
+                                                  settings.MEDIA_SERIAL))
 
         return paths
 
@@ -76,3 +74,19 @@ def manifest(request, manifest_class):
 
     # TODO: ETags
     return manifest_class(request, version, url_prefix, urls)
+
+
+@login_required
+def manifests(request):
+    urls = [{
+        'url': reverse('media-manifest'),
+    }]
+
+    adding_manifest_urls.send(sender=None, request=request, urls=urls)
+
+    return ManifestResponse(request, urls)
+
+
+@login_required
+def media_manifest(request):
+    return ManifestResponse(request, get_media_urls(), settings.MEDIA_SERIAL)

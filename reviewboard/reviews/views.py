@@ -29,11 +29,13 @@ from djblets.siteconfig.models import SiteConfiguration
 from reviewboard.accounts.decorators import check_login_required, \
                                             valid_prefs_required
 from reviewboard.accounts.models import ReviewRequestVisit
-from reviewboard.diffviewer.diffutils import get_file_chunks_in_range
+from reviewboard.diffviewer.diffutils import get_file_chunks_in_range, \
+                                             get_enable_highlighting
 from reviewboard.diffviewer.forms import UploadDiffForm
 from reviewboard.diffviewer.models import DiffSet
 from reviewboard.diffviewer.views import view_diff, view_diff_fragment, \
                                          exception_traceback_string
+from reviewboard.offline.manifests import ManifestResponse
 from reviewboard.reviews.datagrids import DashboardDataGrid, \
                                           GroupDataGrid, \
                                           ReviewRequestDataGrid, \
@@ -44,6 +46,7 @@ from reviewboard.reviews.forms import NewReviewRequestForm, \
 from reviewboard.reviews.models import Comment, ReviewRequest, \
                                        ReviewRequestDraft, Review, Group, \
                                        Screenshot, ScreenshotComment
+from reviewboard.reviews.offline import get_review_request_urls
 from reviewboard.scmtools.core import PRE_CREATION
 from reviewboard.scmtools.models import Repository
 
@@ -251,6 +254,41 @@ def review_detail(request, review_request_id,
 
     return response
 
+
+@login_required
+def offline_manifest(request, review_request_id):
+    review_request = get_object_or_404(ReviewRequest, pk=review_request_id)
+
+    # TODO: Combine this with the one in review_detail
+    review_timestamp = 0
+
+    try:
+        last_draft_review = Review.objects.filter(
+            review_request=review_request,
+            user=request.user,
+            public=False).latest()
+        review_timestamp = last_draft_review.timestamp
+    except Review.DoesNotExist:
+        pass
+
+    # Find out if we can bail early. Generate an ETag for this.
+    draft = review_request.get_draft()
+    last_activity_time = get_last_activity_time(review_request, draft)
+    highlighting = get_enable_highlighting(request.user)[0]
+
+    etag = "%s:%s:%s:%s:%s" % (request.user, last_activity_time,
+                               review_timestamp, highlighting,
+                               settings.AJAX_SERIAL)
+
+    if etag_if_none_match(request, etag):
+        return HttpResponseNotModified()
+
+    response = ManifestResponse(
+        request, get_review_request_urls(request, review_request), etag)
+
+    set_etag(response, etag)
+
+    return response
 
 
 @login_required
