@@ -407,6 +407,8 @@ $.fn.syncIndicator = function() {
 
     setState(STATE_ONLINE);
 
+    RB.Offline.init();
+
     return self;
 
     function setState(newState) {
@@ -437,13 +439,14 @@ $.fn.syncIndicator = function() {
         if (state == STATE_ONLINE) {
             /* We're going offline. */
             setState(STATE_SYNCING);
-            store.checkForUpdate();
-            store.enabled = true;
+            RB.Offline.goOffline();
+            //store.checkForUpdate();
+            //store.enabled = true;
         }
         else if (state == STATE_OFFLINE) {
             /* We're going online. */
             setState(STATE_ONLINE);
-            store.enabled = false;
+            //store.enabled = false;
         }
         else if (state == STATE_SYNCING) {
             /* TODO: What to do here? */
@@ -452,6 +455,7 @@ $.fn.syncIndicator = function() {
     }
 
     function createServer() {
+        return true;
         if (localServer != null) {
             return true;
         }
