@@ -263,4 +263,159 @@ RB.Offline.Gears = {
     }
 };
 
+RB.ReviewRequest = function(id, path, buttons) {
+    this.id = id;
+    this.path = path;
+    this.buttons = buttons;
+
+    return this;
+}
+
+$.extend(RB.ReviewRequest.prototype, {
+    /* Constants */
+    CHECK_UPDATES_MSECS: 5 * 60 * 1000, // Every 5 minutes
+    CLOSE_DISCARDED: 1,
+    CLOSE_SUBMITTED: 2,
+
+    /* Events */
+    onUpdated: function(info) {},
+
+    /* Review request API */
+    setDraftField: function(field, value, onSuccess, onError) {
+        if (RB.Offline.isOffline()) {
+            console.log("Can't set field");
+        }
+        else {
+            this._apiCall({
+                path: "/draft/set/" + field + "/",
+                buttons: this.buttons,
+                data: { value: value },
+                errorPrefix: "Saving the draft has failed due to a " +
+                             "server error:",
+                success: onSuccess, // XXX
+                error: onError // XXX
+            });
+        }
+    },
+
+    publish: function() {
+        if (RB.Offline.isOffline()) {
+            console.log("Can't publish");
+        }
+        else {
+            this._apiCall({
+                path: "/publish/",
+                buttons: this.buttons,
+                errorPrefix: "Publishing the draft has failed due to a " +
+                             "server error:"
+            });
+        }
+    },
+
+    discardDraft: function() {
+        if (RB.Offline.isOffline()) {
+            console.log("Can't discard draft");
+        }
+        else {
+            this._apiCall({
+                path: "/draft/discard/",
+                buttons: this.buttons,
+                errorPrefix: "Discarding the draft has failed due to a " +
+                             "server error:"
+            });
+        }
+    },
+
+    close: function(type) {
+        if (RB.Offline.isOffline()) {
+            console.log("Can't close review request");
+        }
+        else if (type == this.CLOSE_DISCARDED) {
+            this._apiCall({
+                path: "/close/discarded/",
+                buttons: this.buttons,
+                errorPrefix: "Discarding the review request has failed " +
+                             "due to a server error:"
+            });
+        }
+        else if (type == this.CLOSE_SUBMITTED) {
+            this._apiCall({
+                path: "/close/submitted/",
+                buttons: this.buttons,
+                errorPrefix: "Setting the review request as submitted " +
+                             "has failed due to a server error:"
+            });
+        }
+    },
+
+    reopen: function() {
+        if (RB.Offline.isOffline()) {
+            console.log("Can't reopen review request");
+        }
+        else {
+            this._apiCall({
+                path: "/reopen/",
+                buttons: this.buttons,
+                errorPrefix: "Reopening the review request has failed " +
+                             "due to a server error:"
+            });
+        }
+    },
+
+    deletePermanently: function(buttons, onSuccess) {
+        if (RB.Offline.isOffline()) {
+            console.log("Can't delete review request");
+        }
+        else {
+            this._apiCall({
+                path: "/delete/",
+                buttons: this.buttons.add(buttons), // XXX
+                errorPrefix: "Deleting the review request has failed " +
+                             "due to a server error:",
+                success: onSuccess
+            });
+        }
+    },
+
+    beginCheckForUpdates: function(type, lastUpdateTimestamp) {
+        this.checkUpdatesType = type;
+        this.lastUpdateTimestamp = lastUpdateTimestamp;
+
+        setTimeout(this._checkForUpdates, this.CHECK_UPDATES_MSECS);
+    },
+
+    _checkForUpdates: function() {
+        if (!RB.Offline.isOffline()) {
+            var self = this;
+
+            this._apiCall({
+                type: "GET",
+                noActivityIndicator: true,
+                path: "/last-update/",
+                success: function(rsp) {
+                    if ((self.checkUpdatesType == undefined ||
+                         self.checkUpdatesType == rsp.type) &&
+                        self.lastUpdateTimestamp != rsp.timestamp) {
+                        self.onUpdated(rsp);
+                    }
+
+                    self.lastUpdateTimestamp = rsp.timestamp;
+
+                    setTimeout(self._checkForUpdates, self.CHECK_UPDATES_MSECS);
+                }
+            });
+        }
+    },
+
+    _apiCall: function(options) {
+        options.path = "/reviewrequests/" + this.id + options.path;
+
+        if (!options.success) {
+            options.success = function() { window.location = this.path; };
+        }
+
+        rbApiCall(options);
+    }
+});
+
 // vim: set et:sw=4:
