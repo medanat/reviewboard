@@ -496,7 +496,9 @@ $.fn.syncIndicator = function() {
                 .animate({
                     top: "-=10px",
                     opacity: 0
-                }, 350, "swing")
+                }, 350, "swing", function() {
+                    statusBox.hide();
+                });
         }
 
         stateIcon.attr("src", MEDIA_URL + "rb/images/" + iconName +

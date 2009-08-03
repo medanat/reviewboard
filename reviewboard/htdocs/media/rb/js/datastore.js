@@ -100,11 +100,13 @@ RB.Offline = {
     _loadManifestsList: function(manifestsList) {
         var self = this;
 
+        $.funcQueue("offline").clear();
+
         $.each(manifestsList.urls, function(i, item) {
             /* Get the URLs from this manifest. */
             $.funcQueue("offline").add(function() {
-                $.getJSON(item['url'], function(manifest) {
-                    self._preprocessManifest(manifest);
+                $.getJSON(item.url, function(manifest) {
+                    self._preprocessManifest(item.url, manifest);
                     $.funcQueue("offline").next();
                 });
             });
@@ -112,7 +114,13 @@ RB.Offline = {
 
         $.funcQueue("offline").add(function() {
             self.totalURLs = self.pendingURLs.length;
-            self._captureFiles();
+
+            if (self.totalURLs == 0) {
+                $.funcQueue("offline").next();
+            }
+            else {
+                self._captureFiles();
+            }
         });
 
         $.funcQueue("offline").add(function() {
@@ -123,22 +131,19 @@ RB.Offline = {
         $.funcQueue("offline").start();
     },
 
-	_preprocessManifest: function(manifest) {
-		/* Determine if we need to load this manifest. */
-		var needManifest = true; // TODO
-
-		if (needManifest) {
+    _preprocessManifest: function(url, manifest) {
+        if (!this.backend.hasManifest(url, manifest)) {
+            this.backend.storeManifest(url, manifest);
             this.pendingURLs = this.pendingURLs.concat(manifest.urls);
-		}
-	}
+        }
+    },
 
     _captureFiles: function() {
         /* Once we have the list of URLs, begin downloading. */
-        var self = this;
-        self._updateState(self.STATE_SYNCING);
-        self.onProgress(0, self.totalURLs);
+        this._updateState(this.STATE_SYNCING);
+        this.onProgress(0, this.totalURLs);
 
-        self._downloadNextFile();
+        this._downloadNextFile();
     },
 
     _downloadNextFile: function() {
@@ -174,17 +179,23 @@ RB.Offline = {
     _switchOffline: function() {
         this._updateState(this.STATE_OFFLINE);
         this.backend.setLookupsEnabled(true);
-    },
+    }
 };
 
 RB.Offline.Gears = {
     localServer: null,
     store: null,
+    db: null,
 
     setupServer: function() {
         try {
             this.localServer = google.gears.factory.create("beta.localserver");
             this.store = this.localServer.createStore("reviewboard");
+
+            this.db = google.gears.factory.create("beta.database");
+            this.db.open("reviewboard");
+            this.db.execute("CREATE TABLE IF NOT EXISTS manifest_versions" +
+                            " (url TEXT, version TEXT)");
             return true;
         }
         catch (e) {
@@ -214,12 +225,43 @@ RB.Offline.Gears = {
         }
     },
 
+    hasManifest: function(url, manifest) {
+        return (this._getVersionForManifest(url) == manifest.version);
+    },
+
+    storeManifest: function(url, manifest) {
+        if (this._getVersionForManifest(url) != null) {
+            this.db.execute("UPDATE manifest_versions SET version = ?" +
+                            " WHERE url = ?",
+                            [manifest.version, url]);
+        }
+        else {
+            this.db.execute("INSERT INTO manifest_versions (url, version)" +
+                            " VALUES (?, ?)",
+                            [url, manifest.version]);
+        }
+    },
+
     capture: function(url, onDone) {
         this.store.capture(url, onDone);
     },
 
     aliasURL: function(url, alias) {
         this.store.copy(url, alias);
+    },
+
+    _getVersionForManifest: function(url) {
+        var version = null;
+        var rs = this.db.execute("SELECT version FROM manifest_versions" +
+                                 " WHERE url = ?", [url]);
+
+        if (rs.isValidRow()) {
+            version = rs.fieldByName("version");
+        }
+
+        rs.close();
+
+        return version;
     }
 };
 
