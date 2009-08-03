@@ -23,8 +23,6 @@ RB.Offline = {
 
         if (window.google && google.gears) {
             this.backend = RB.Offline.Gears;
-        } else {
-            // TODO: HTML 5
         }
 
         this._updateState(this.isOffline()
@@ -49,12 +47,12 @@ RB.Offline = {
     },
 
     isOffline: function() {
-        return this.offlineSupported &&
+        return this.offlineSupported() &&
                (this.backend.isOffline() || !this.canGoOnline());
     },
 
     checkPermission: function() {
-        if (this.offlineSupported) {
+        if (this.offlineSupported()) {
             return this.backend.checkPermission();
         }
 
