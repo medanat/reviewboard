@@ -67,7 +67,7 @@ $.extend(RB.DiffComment.prototype, {
                 },
                 success: function() {
                     self.saved = false;
-                    $.event.trigger("deleted", null, this);
+                    $.event.trigger("deleted", null, self);
                     self._deleteAndDestruct();
                 }
             });
@@ -237,6 +237,101 @@ $.extend(RB.ReviewRequest.prototype, {
         }
 
         rbApiCall(options);
+    }
+});
+
+
+RB.ScreenshotComment = function(x, y, width, height, textOnServer) {
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+    this.text = textOnServer || "";
+    this.saved = (textOnServer != undefined);
+
+    return this;
+}
+
+$.extend(RB.ScreenshotComment.prototype, {
+    /*
+     * Sets the current text in the comment block.
+     *
+     * @param {string} text  The new text to set.
+     */
+    setText: function(text) {
+        this.text = text;
+        $.event.trigger("textChanged", null, this);
+    },
+
+    /*
+     * Saves the comment on the server.
+     */
+    save: function() {
+        var self = this;
+
+        rbApiCall({
+            url: this._getURL(),
+            data: {
+                action: "set",
+                text: this.text
+            },
+            success: function() {
+                self.saved = true;
+                $.event.trigger("saved", null, self);
+            }
+        });
+    },
+
+    /*
+     * Deletes the comment from the server.
+     */
+    deleteComment: function() {
+        var self = this;
+
+        if (this.saved) {
+            console.log("Calling delete");
+            rbApiCall({
+                url: this._getURL(),
+                data: {
+                    action: "delete"
+                },
+                success: function() {
+                    self.saved = false;
+                    $.event.trigger("deleted", null, self);
+                    self._deleteAndDestruct();
+                }
+            });
+        }
+        else {
+            this._deleteAndDestruct();
+        }
+    },
+
+    deleteIfEmpty: function() {
+        if (this.text != "") {
+            return;
+        }
+
+        this.deleteComment();
+    },
+
+    _deleteAndDestruct: function() {
+        $.event.trigger("destroyed", null, this);
+        delete self;
+    },
+
+    /*
+     * Returns the URL used for API calls.
+     *
+     * @return {string} The URL used for API calls for this comment block.
+     */
+    _getURL: function() {
+        return getReviewRequestAPIPath(true) +
+               getScreenshotAPIPath(gScreenshotId,
+                                    Math.round(this.x),
+                                    Math.round(this.y),
+                                    Math.round(this.width),
+                                    Math.round(this.height));
     }
 });
 

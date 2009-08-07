@@ -275,7 +275,6 @@ $.extend(DiffCommentBlock.prototype, {
         }
 
         var self = this;
-        var myself = this;
         var el = this.el;
         var comment = new RB.DiffComment(this.filediff, this.interfilediff,
                                          this.beginLineNum, this.endLineNum,
@@ -290,7 +289,6 @@ $.extend(DiffCommentBlock.prototype, {
         });
 
         $.event.add(comment, "destroyed", function() {
-            el.removeClass("draft");
             self.draftComment = null;
 
             /* Discard the comment block if empty. */
@@ -298,6 +296,7 @@ $.extend(DiffCommentBlock.prototype, {
                 el.fadeOut(350, function() { el.remove(); })
                 self.anchor.remove();
             } else {
+                el.removeClass("draft");
                 self.updateCount();
                 self.updateTooltip();
             }
