@@ -10,6 +10,11 @@ var ANCHOR_FILE = 2;
 var ANCHOR_CHUNK = 4;
 
 
+// State
+var gDiffViewer = new RB.DiffViewer(gReviewRequestId, gRevision,
+                                    gInterdiffRevision);
+
+
 /*
  * A list of key bindings for the page.
  */
@@ -920,27 +925,13 @@ function addCommentFlags(table, lines) {
  * @param {string} tbody_id     The tbody ID to insert into.
  */
 function expandChunk(fileid, filediff_id, chunk_index, link) {
-    var revision = gRevision;
+    gDiffViewer.getDiffFragment(fileid, filediff_id, chunk_index,
+                                function(html) {
+        var tbody = $(link).parents("tbody.collapsed");
+        var table = tbody.parent();
 
-    if (gInterdiffRevision != null) {
-      revision += "-" + gInterdiffRevision;
-    }
-
-    rbApiCall({
-        url: SITE_ROOT + 'r/' + gReviewRequestId + '/diff/' + revision +
-             '/fragment/' + filediff_id + '/chunk/' + chunk_index + '/',
-        data: {},
-        type: "GET",
-        dataType: "html",
-        complete: function(res, status) {
-            if (status == "success") {
-                var tbody = $(link).parents("tbody.collapsed");
-                var table = tbody.parent();
-
-                tbody.replaceWith(res.responseText);
-                addCommentFlags(table, gHiddenComments);
-            }
-        }
+        tbody.replaceWith(html);
+        addCommentFlags(table, gHiddenComments);
     });
 }
 

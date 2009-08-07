@@ -112,6 +112,39 @@ $.extend(RB.DiffComment.prototype, {
 });
 
 
+RB.DiffViewer = function(review_request_id, revision, interdiff_revision) {
+    this.review_request_id = review_request_id;
+    this.revision = revision;
+    this.interdiff_revision = interdiff_revision;
+
+    return this;
+}
+
+$.extend(RB.DiffViewer.prototype, {
+    getDiffFragment: function(fileid, filediff_id, chunk_index, onSuccess) {
+        var revision = this.revision;
+
+        if (this.interdiff_revision != null) {
+            revision += "-" + this.interdiff_revision;
+        }
+
+        rbApiCall({
+            url: SITE_ROOT + 'r/' + this.review_request_id + '/diff/' +
+                 revision + '/fragment/' + filediff_id + '/chunk/' +
+                 chunk_index + '/',
+            data: {},
+            type: "GET",
+            dataType: "html",
+            complete: function(res, status) {
+                if (status == "success") {
+                    onSuccess(res.responseText);
+                }
+            }
+        });
+    }
+});
+
+
 RB.ReviewRequest = function(id, path, buttons) {
     this.id = id;
     this.path = path;
