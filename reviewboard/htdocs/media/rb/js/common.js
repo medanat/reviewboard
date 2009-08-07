@@ -113,25 +113,26 @@ function rbApiCall(options) {
                 if ($.isFunction(options.error)) {
                     options.error(xhr, textStatus, errorThrown);
                 }
-            },
-            complete: function(xhr, status) {
-                if (options.buttons) {
-                    options.buttons.attr("disabled", false);
-                }
-
-                if (!options.noActivityIndicator) {
-                    $("#activity-indicator")
-                        .delay(1000)
-                        .fadeOut("fast");
-                }
-
-                if ($.isFunction(options.complete)) {
-                    options.complete(xhr, status);
-                }
-
-                $.funcQueue("rbapicall").next();
             }
         }, options);
+
+        data.complete = function(xhr, status) {
+            if (options.buttons) {
+                options.buttons.attr("disabled", false);
+            }
+
+            if (!options.noActivityIndicator) {
+                $("#activity-indicator")
+                    .delay(1000)
+                    .fadeOut("fast");
+            }
+
+            if ($.isFunction(options.complete)) {
+                options.complete(xhr, status);
+            }
+
+            $.funcQueue("rbapicall").next();
+        };
 
         if (options.form) {
             options.form.ajaxSubmit(data);
