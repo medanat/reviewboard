@@ -433,19 +433,15 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                 })
                 .bind("complete", function(e, value) {
                     self.html(linkifyText(self.text()));
-                    reviewRequestApiCall({
-                        path: "/reviews/" + review_id + "/replies/draft/",
-                        data: {
-                            value:     value,
-                            id:        context_id,
-                            type:      context_type,
-                            review_id: review_id
-                        },
-                        buttons: bannerButtonsEl,
-                        success: function(rsp) {
-                            removeCommentFormIfEmpty(self);
-                            showReplyDraftBanner(review_id);
-                        }
+
+                    var comment = new RB.ReviewReplyComment(gReviewRequest.id,
+                                                            review_id,
+                                                            context_id,
+                                                            context_type);
+                    comment.value = value;
+                    comment.save(bannerButtonsEl, function() {
+                        removeCommentFormIfEmpty(self);
+                        showReplyDraftBanner(review_id);
                     });
                 })
                 .bind("cancel", function(e) {

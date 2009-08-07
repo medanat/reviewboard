@@ -288,6 +288,48 @@ $.extend(RB.ReviewRequest.prototype, {
 });
 
 
+/*
+RB.Review = function(id, review_request) {
+    this.id = id;
+    this.review_request = review_request;
+
+    return this;
+}
+
+$.extend(RB.Review.prototype, {
+});
+*/
+
+
+RB.ReviewReplyComment = function(review_request_id, review_id,
+                                 context_id, context_type) {
+    this.review_request_id = review_request_id;
+    this.review_id = review_id;
+    this.context_id = context_id;
+    this.context_type = context_type;
+    this.value = "";
+
+    return this;
+}
+
+$.extend(RB.ReviewReplyComment.prototype, {
+    save: function(buttons, onSuccess) {
+        rbApiCall({
+            path: "/reviewrequests/" + this.review_request_id +
+                  "/reviews/" + this.review_id + "/replies/draft/",
+            data: {
+                value:     this.value,
+                id:        this.context_id,
+                type:      this.context_type,
+                review_id: this.review_id
+            },
+            buttons: buttons,
+            success: onSuccess
+        });
+    }
+});
+
+
 RB.ScreenshotComment = function(x, y, width, height, textOnServer) {
     this.x = x;
     this.y = y;
