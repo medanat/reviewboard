@@ -104,15 +104,12 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
 
     this.filediff = gFileAnchorToId[fileid];
     this.interfilediff = gInterdiffFileAnchorToId[fileid];
+    this.beginLineNum = beginLineNum;
+    this.endLineNum = endLineNum;
     this.beginRow = beginRow;
     this.endRow = endRow;
-    this.beginLineNum = beginLineNum
-    this.endLineNum = endLineNum;
-    this.hasDraft = false;
     this.comments = [];
-    this.text = "";
-    this.canDelete = false;
-    this.type = "comment";
+    this.draftComment = null;
 
     this.el = $("<span/>")
         .addClass("commentflag")
@@ -137,7 +134,8 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
     }
 
     this.anchor = $("<a/>")
-        .attr("name", "file" + this.filediff['id'] + "line" + this.beginLineNum)
+        .attr("name", "file" + this.filediff['id'] + "line" +
+                      this.beginLineNum)
         .addClass("comment-anchor")
         .appendTo(this.el);
 
@@ -150,15 +148,13 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
             var comment = comments[i];
 
             if (comment.localdraft) {
-                this.setText(comment.text);
-                this.setHasDraft(true);
-                this.canDelete = true;
+                this._createDraftComment(comment.text);
             } else {
                 this.comments.push(comment);
             }
         }
     } else {
-        this.setHasDraft(true);
+        this._createDraftComment();
     }
 
     this.updateCount();
@@ -169,70 +165,6 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
 }
 
 $.extend(DiffCommentBlock.prototype, {
-    /*
-     * Discards the comment block if it's empty.
-     */
-    discardIfEmpty: function() {
-        if (this.text == "" && this.comments.length == 0) {
-            var self = this;
-            this.el.fadeOut(350, function() { self.el.remove(); })
-        }
-
-        this.anchor.remove();
-    },
-
-    /*
-     * Saves the draft text in the comment block to the server.
-     */
-    save: function() {
-        var self = this;
-
-        rbApiCall({
-            url: this.getURL(),
-            data: {
-                action: "set",
-                num_lines: this.getNumLines(),
-                text: this.text
-            },
-            success: function(data) {
-                self.canDelete = true;
-                self.setHasDraft(true);
-                self.updateCount();
-                self.notify("Comment Saved");
-                showReviewBanner();
-            }
-        });
-    },
-
-    /*
-     * Deletes the draft comment on the server, discarding the comment block
-     * afterward if empty.
-     */
-    deleteComment: function() {
-        if (!this.canDelete) {
-            // TODO: Script error. Report it.
-            return;
-        }
-
-        var self = this;
-
-        rbApiCall({
-            url: this.getURL(),
-            data: {
-                action: "delete",
-                num_lines: this.getNumLines()
-            },
-            success: function(data) {
-                self.canDelete = false;
-                self.text = "";
-                self.setHasDraft(false);
-                self.updateCount();
-                self.discardIfEmpty();
-                self.notify("Comment Deleted");
-            }
-        });
-    },
-
     /*
      * Notifies the user of some update. This notification appears by the
      * comment flag.
@@ -267,35 +199,15 @@ $.extend(DiffCommentBlock.prototype, {
     },
 
     /*
-     * Sets the current text in the comment block.
-     *
-     * @param {string} text  The new text to set.
-     */
-    setText: function(text) {
-        this.text = text;
-
-        this.updateTooltip();
-    },
-
-    /*
-     * Returns the number of lines that this comment covers.
-     *
-     * @return {int} The number of lines this comment covers.
-     */
-    getNumLines: function() {
-        return this.endLineNum - this.beginLineNum + 1;
-    },
-
-    /*
      * Updates the tooltip contents.
      */
     updateTooltip: function() {
         this.tooltip.empty();
         var list = $("<ul/>");
 
-        if (this.text != "") {
+        if (this.draftComment != null) {
             $("<li/>")
-                .text(this.text.truncate())
+                .text(this.draftComment.text.truncate())
                 .addClass("draft")
                 .appendTo(list);
         }
@@ -318,30 +230,12 @@ $.extend(DiffCommentBlock.prototype, {
     updateCount: function() {
         var count = this.comments.length;
 
-        if (this.hasDraft) {
+        if (this.draftComment != null) {
             count++;
         }
 
         this.count = count;
         this.countEl.html(this.count);
-    },
-
-    /*
-     * Sets whether or not this comment block has a draft comment.
-     *
-     * @param {bool} hasDraft  true if this has a draft comment, or false
-     *                         otherwise.
-     */
-    setHasDraft: function(hasDraft) {
-        if (hasDraft != this.hasDraft) {
-            if (hasDraft) {
-                this.el.addClass("draft");
-            } else {
-                this.el.removeClass("draft");
-            }
-
-            this.hasDraft = hasDraft;
-        }
     },
 
     /*
@@ -359,8 +253,11 @@ $.extend(DiffCommentBlock.prototype, {
 
         gCommentDlg
             .one("close", function() {
+                self._createDraftComment();
+
                 gCommentDlg
-                    .setCommentBlock(self)
+                    .setDraftComment(self.draftComment)
+                    .setCommentsList(self.comments, "comment")
                     .css({
                         left: $(document).scrollLeft() +
                               ($(window).width() - gCommentDlg.width()) / 2,
@@ -372,24 +269,49 @@ $.extend(DiffCommentBlock.prototype, {
             .close();
     },
 
-    /*
-     * Returns the URL used for API calls.
-     *
-     * @return {string} The URL used for API calls for this comment block.
-     */
-    getURL: function() {
-        var interfilediff_revision = null;
-        var interfilediff_id = null;
-
-        if (this.interfilediff != null) {
-            interfilediff_revision = this.interfilediff['revision'];
-            interfilediff_id = this.interfilediff['id'];
+    _createDraftComment: function(textOnServer) {
+        if (this.draftComment != null) {
+            return;
         }
 
-        return getReviewRequestAPIPath(true) +
-               getDiffAPIPath(this.filediff['revision'], this.filediff['id'],
-                              interfilediff_revision, interfilediff_id,
-                              this.beginLineNum);
+        var self = this;
+        var myself = this;
+        var el = this.el;
+        var comment = new RB.DiffComment(this.filediff, this.interfilediff,
+                                         this.beginLineNum, this.endLineNum,
+                                         textOnServer);
+
+        $.event.add(comment, "textChanged", function() {
+            self.updateTooltip();
+        });
+
+        $.event.add(comment, "deleted", function() {
+            self.notify("Comment Deleted");
+        });
+
+        $.event.add(comment, "destroyed", function() {
+            el.removeClass("draft");
+            self.draftComment = null;
+
+            /* Discard the comment block if empty. */
+            if (self.comments.length == 0) {
+                el.fadeOut(350, function() { el.remove(); })
+                self.anchor.remove();
+            } else {
+                self.updateCount();
+                self.updateTooltip();
+            }
+        });
+
+        $.event.add(comment, "saved", function() {
+            self.updateCount();
+            self.updateTooltip();
+            self.notify("Comment Saved");
+            showReviewBanner();
+        });
+
+        this.draftComment = comment;
+        el.addClass("draft");
     }
 });
 

@@ -540,7 +540,7 @@ $.fn.commentDlg = function() {
     var self = this;
 
     /* State */
-    var commentBlock = null;
+    var comment = null;
     var textFieldWidthDiff = 0;
     var textFieldHeightDiff = 0;
     var dirty = false;
@@ -555,18 +555,18 @@ $.fn.commentDlg = function() {
     var statusField  = $(".status", draftForm);
     var cancelButton = $("#comment_cancel", draftForm)
         .click(function() {
-            commentBlock.discardIfEmpty();
+            comment.deleteIfEmpty();
             self.close();
         });
     var deleteButton = $("#comment_delete", this)
         .click(function() {
-            commentBlock.deleteComment();
+            comment.deleteComment();
             self.close();
         });
     var saveButton = $("#comment_save", this)
         .click(function() {
-            commentBlock.setText(textField.val());
-            commentBlock.save();
+            comment.setText(textField.val());
+            comment.save();
             self.close();
         });
 
@@ -594,10 +594,11 @@ $.fn.commentDlg = function() {
             }
         })
         .keyup(function(e) {
-            dirty = dirty || commentBlock.text != textField.val();
+            dirty = dirty || comment.text != textField.val();
+
+            saveButton.attr("disabled", textField.val() == "");
 
             if (dirty && !oldDirty) {
-                saveButton.attr("disabled", textField.val() == "");
                 statusField.html("This comment has unsaved changes.");
                 self.handleResize();
 
@@ -711,7 +712,7 @@ $.fn.commentDlg = function() {
                 opacity: 0
             }, 350, "swing", function() {
                 self.hide();
-                commentBlock = null;
+                self.comment = null;
                 self.trigger("close");
             });
         } else {
@@ -722,30 +723,14 @@ $.fn.commentDlg = function() {
     }
 
     /*
-     * Sets the active comment block. This will reset the default state of
-     * the comment dialog and update the UI to show any other comments in
-     * the block.
+     * Sets the list of existing comments to show.
      *
-     * @param {CommentBlock} newCommentBlock The new comment block to set.
+     * @param {array} comments    The array of comments to show.
+     * @param {string} replyType  The reply type for the comments listed.
      *
      * @return {jQuery} This jQuery.
      */
-    this.setCommentBlock = function(newCommentBlock) {
-        if (commentBlock && commentBlock != newCommentBlock) {
-            commentBlock.discardIfEmpty();
-        }
-
-        commentBlock = newCommentBlock;
-        textField.val(commentBlock.text);
-        dirty = false;
-
-        /* Set the initial button states */
-        deleteButton.setVisible(commentBlock.canDelete);
-        saveButton.attr("disabled", true);
-
-        /* Clear the status field. */
-        statusField.empty();
-
+    this.setCommentsList = function(comments, replyType) {
         commentsList.empty();
 
         /*
@@ -756,10 +741,10 @@ $.fn.commentDlg = function() {
 
         var showComments = false;
 
-        if (commentBlock.comments.length > 0) {
+        if (comments.length > 0) {
             var odd = true;
 
-            $(commentBlock.comments).each(function(i) {
+            $(comments).each(function(i) {
                 var item = $("<li/>")
                     .addClass(odd ? "odd" : "even");
                 var header = $("<h2/>").appendTo(item).html(this.user.name);
@@ -768,7 +753,7 @@ $.fn.commentDlg = function() {
                 $('<a href="' + this.url + '">View</a>').appendTo(actions);
                 $('<a href="' + gReviewRequestPath +
                   '?reply_id=' + this.comment_id +
-                  '&reply_type=' + commentBlock.type + '">Reply</a>')
+                  '&reply_type=' + replyType + '">Reply</a>')
                     .appendTo(actions);
                 $("<pre/>").appendTo(item).text(this.text);
 
@@ -797,6 +782,33 @@ $.fn.commentDlg = function() {
         self
             .width(width)
             .height(250);
+
+        return this;
+    }
+
+    /*
+     * Sets the draft comment to modify. This will reset the default state of
+     * the comment dialog.
+     *
+     * @param {RB.Comment} newComment The new draft comment to set.
+     *
+     * @return {jQuery} This jQuery.
+     */
+    this.setDraftComment = function(newComment) {
+        if (comment && comment != newComment) {
+            comment.deleteIfEmpty();
+        }
+
+        comment = newComment;
+        textField.val(comment.text);
+        dirty = false;
+
+        /* Set the initial button states */
+        deleteButton.setVisible(comment.saved);
+        saveButton.attr("disabled", true);
+
+        /* Clear the status field. */
+        statusField.empty();
 
         return this;
     }
