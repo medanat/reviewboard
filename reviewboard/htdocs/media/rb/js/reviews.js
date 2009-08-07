@@ -1,7 +1,3 @@
-// Constants
-var CHECK_UPDATES_MSECS = 5 * 60 * 1000; // Every 5 minutes
-
-
 // State variables
 var gPublishing = false;
 var gPendingSaveCount = 0;
@@ -9,6 +5,9 @@ var gPendingDiffFragments = {};
 var gReviewBanner = $("#review-banner");
 var gDraftBanner = $("#draft-banner");
 var gDraftBannerButtons = $("input", gDraftBanner);
+var gReviewRequest = new RB.ReviewRequest(gReviewRequestId,
+                                          gReviewRequestPath,
+                                          gDraftBannerButtons);
 
 
 /*
@@ -245,12 +244,9 @@ function linkifyText(text) {
  * @param {string} value  The field value.
  */
 function setDraftField(field, value) {
-    reviewRequestApiCall({
-        path: "/draft/set/" + field + "/",
-        buttons: gDraftBannerButtons,
-        data: { value: value },
-        errorPrefix: "Saving the draft has failed due to a server error:",
-        success: function(rsp) {
+    gReviewRequest.setDraftField(
+        field, value,
+        function(rsp) {
             var func = gEditorCompleteHandlers[field];
 
             if ($.isFunction(func)) {
@@ -267,10 +263,10 @@ function setDraftField(field, value) {
                 }
             }
         },
-        error: function() {
+        function() {
             gPublishing = false;
         }
-    });
+    );
 }
 
 
@@ -347,12 +343,7 @@ function publishDraft() {
     } else if ($.trim($("#description").html()) == "") {
         alert("The draft must have a description.");
     } else {
-        reviewRequestApiCall({
-            path: "/publish/",
-            buttons: gDraftBannerButtons,
-            errorPrefix: "Publishing the draft has failed due to a " +
-                         "server error:"
-        });
+        gReviewRequest.publish();
     }
 }
 
@@ -1155,7 +1146,7 @@ function registerForUpdates(lastTimestamp, type) {
     var summaryEl;
     var userEl;
 
-    function showUpdate(info) {
+    $.event.add(gReviewRequest, "updated", function(evt, info) {
         if (bubble.length == 0) {
             bubble = $('<div id="updates-bubble"/>');
             summaryEl = $('<span/>')
@@ -1192,27 +1183,9 @@ function registerForUpdates(lastTimestamp, type) {
             .css("position", $.browser.msie && $.browser.version == 6
                              ? "absolute" : "fixed")
             .fadeIn();
-    }
+    });
 
-    function checkForUpdates() {
-        reviewRequestApiCall({
-            type: "GET",
-            noActivityIndicator: true,
-            path: '/last-update/',
-            success: function(rsp) {
-                if ((type == undefined || type == rsp.type) &&
-                    lastTimestamp != rsp.timestamp) {
-                    showUpdate(rsp);
-                }
-
-                lastTimestamp = rsp.timestamp;
-
-                setTimeout(checkForUpdates, CHECK_UPDATES_MSECS);
-            }
-        });
-    }
-
-    setTimeout(checkForUpdates, CHECK_UPDATES_MSECS);
+    gReviewRequest.beginCheckForUpdates(type, lastTimestamp);
 }
 
 
@@ -1520,25 +1493,13 @@ $(document).ready(function() {
     });
 
     $("#btn-draft-discard").click(function() {
-        reviewRequestApiCall({
-            path: "/draft/discard/",
-            buttons: gDraftBannerButtons,
-            errorPrefix: "Reverting the draft has failed due to a " +
-                         "server error:"
-        });
-
+        gReviewRequest.discardDraft();
         return false;
     });
 
     $("#btn-review-request-discard, #discard-review-request-link")
         .click(function() {
-            reviewRequestApiCall({
-                path: "/close/discarded/",
-                buttons: gDraftBannerButtons,
-                errorPrefix: "Discarding the review request has failed " +
-                             "due to a server error:"
-            });
-
+            gReviewRequest.close(RB.ReviewRequest.CLOSE_DISCARDED);
             return false;
         });
 
@@ -1547,23 +1508,13 @@ $(document).ready(function() {
          * This is a non-destructive event, so don't confirm unless there's
          * a draft. (TODO)
          */
-        reviewRequestApiCall({
-            path: "/close/submitted/",
-            buttons: gDraftBannerButtons,
-            errorPrefix: "Setting the review request as submitted has failed " +
-                         "due to a server error:"
-        });
+        gReviewRequest.close(RB.ReviewRequest.CLOSE_SUBMITTED);
 
         return false;
     });
 
     $("#btn-review-request-reopen").click(function() {
-        reviewRequestApiCall({
-            path: "/reopen/",
-            buttons: gDraftBannerButtons,
-            errorPrefix: "Reopening the review request has failed " +
-                         "due to a server error:"
-        });
+        gReviewRequest.reopen();
 
         return false;
     });
@@ -1578,17 +1529,12 @@ $(document).ready(function() {
                     $('<input type="button" value="Cancel"/>'),
                     $('<input type="button" value="Delete"/>')
                         .click(function(e) {
-                            reviewRequestApiCall({
-                                path: "/delete/",
-                                buttons: gDraftBannerButtons.add(
-                                         $("input", dlg.modalBox("buttons"))),
-                                errorPrefix: "Deleting the review request " +
-                                             "has failed due to a server " +
-                                             "error:",
-                                success: function() {
+                            gReviewRequest.deletePermanently(
+                                $("input", dlg.modalBox("buttons")),
+                                function() {
                                     window.location = SITE_ROOT;
                                 }
-                            });
+                            );
                         })
                 ]
             });

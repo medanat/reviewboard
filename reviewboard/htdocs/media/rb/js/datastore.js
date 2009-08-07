@@ -111,4 +111,133 @@ $.extend(RB.DiffComment.prototype, {
     }
 });
 
+
+RB.ReviewRequest = function(id, path, buttons) {
+    this.id = id;
+    this.path = path;
+    this.buttons = buttons;
+
+    return this;
+}
+
+$.extend(RB.ReviewRequest.prototype, {
+    /* Constants */
+    CHECK_UPDATES_MSECS: 5 * 60 * 1000, // Every 5 minutes
+    CLOSE_DISCARDED: 1,
+    CLOSE_SUBMITTED: 2,
+
+    /* Review request API */
+    setDraftField: function(field, value, onSuccess, onError) {
+        this._apiCall({
+            path: "/draft/set/" + field + "/",
+            buttons: this.buttons,
+            data: { value: value },
+            errorPrefix: "Saving the draft has failed due to a " +
+                         "server error:",
+            success: onSuccess, // XXX
+            error: onError // XXX
+        });
+    },
+
+    publish: function() {
+        this._apiCall({
+            path: "/publish/",
+            buttons: this.buttons,
+            errorPrefix: "Publishing the draft has failed due to a " +
+                         "server error:"
+        });
+    },
+
+    discardDraft: function() {
+        this._apiCall({
+            path: "/draft/discard/",
+            buttons: this.buttons,
+            errorPrefix: "Discarding the draft has failed due to a " +
+                         "server error:"
+        });
+    },
+
+    close: function(type) {
+        if (type == this.CLOSE_DISCARDED) {
+            this._apiCall({
+                path: "/close/discarded/",
+                buttons: this.buttons,
+                errorPrefix: "Discarding the review request has failed " +
+                             "due to a server error:"
+            });
+        }
+        else if (type == this.CLOSE_SUBMITTED) {
+            this._apiCall({
+                path: "/close/submitted/",
+                buttons: this.buttons,
+                errorPrefix: "Setting the review request as submitted " +
+                             "has failed due to a server error:"
+            });
+        }
+    },
+
+    reopen: function() {
+        this._apiCall({
+            path: "/reopen/",
+            buttons: this.buttons,
+            errorPrefix: "Reopening the review request has failed " +
+                         "due to a server error:"
+        });
+    },
+
+    deletePermanently: function(buttons, onSuccess) {
+        this._apiCall({
+            path: "/delete/",
+            buttons: this.buttons.add(buttons), // XXX
+            errorPrefix: "Deleting the review request has failed " +
+                         "due to a server error:",
+            success: onSuccess
+        });
+    },
+
+    beginCheckForUpdates: function(type, lastUpdateTimestamp) {
+        var self = this;
+
+        this.checkUpdatesType = type;
+        this.lastUpdateTimestamp = lastUpdateTimestamp;
+
+        setTimeout(function() { self._checkForUpdates(); },
+                   this.CHECK_UPDATES_MSECS);
+    },
+
+    _checkForUpdates: function() {
+        var self = this;
+
+        this._apiCall({
+            type: "GET",
+            noActivityIndicator: true,
+            path: "/last-update/",
+            success: function(rsp) {
+                if ((self.checkUpdatesType == undefined ||
+                     self.checkUpdatesType == rsp.type) &&
+                    self.lastUpdateTimestamp != rsp.timestamp) {
+                    $.event.trigger("updated", [rsp], self);
+                }
+
+                self.lastUpdateTimestamp = rsp.timestamp;
+
+                setTimeout(function() { self._checkForUpdates(); },
+                           self.CHECK_UPDATES_MSECS);
+            }
+        });
+    },
+
+    _apiCall: function(options) {
+        var self = this;
+
+        options.path = "/reviewrequests/" + this.id + options.path;
+
+        if (!options.success) {
+            options.success = function() { window.location = self.path; };
+        }
+
+        rbApiCall(options);
+    }
+});
+
 // vim: set et:sw=4:
