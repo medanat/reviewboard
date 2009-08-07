@@ -1049,13 +1049,7 @@ function loadFileDiff(filediff_id, filediff_revision,
         }
 
         $.funcQueue("diff_files").add(function() {
-            $.ajax({
-                type: "GET",
-                url: SITE_ROOT + "r/" + gReviewRequestId + "/diff/" +
-                     revision_str + "/fragment/" + filediff_id + "/?" +
-                     "index=" + file_index + "&" + AJAX_SERIAL,
-                complete: onFileLoaded
-            });
+            gDiffViewer.getDiffFile(filediff_id, file_index, onFileLoaded);
         });
     }
 
