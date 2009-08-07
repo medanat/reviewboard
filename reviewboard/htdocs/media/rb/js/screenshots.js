@@ -119,7 +119,7 @@ jQuery.extend(CommentBlock.prototype, {
                 top: "-=10px",
                 opacity: 0.8
             }, 350, "swing")
-            .delay(2000)
+            .delay(1200)
             .animate({
                 top: "+=10px",
                 opacity: 0
