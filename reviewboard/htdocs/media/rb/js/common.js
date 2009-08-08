@@ -159,14 +159,14 @@ function rbApiCall(options) {
  *
  * options has the following fields:
  *
- *    action       - The action. Defaults to "."
- *    confirmLabel - The label on the confirm button.
- *    fields       - The serialized field data.
- *    path         - The path to post to.
- *    success      - The success function. By default, this reloads the page.
- *    title        - The form title.
- *    upload       - true if this is an upload form.
- *    width        - The optional set width of the form.
+ *    action          - The action. Defaults to "."
+ *    confirmLabel    - The label on the confirm button.
+ *    fields          - The serialized field data.
+ *    dataStoreObject - The object to edit or create.
+ *    success         - The success function. By default, this reloads the page.
+ *    title           - The form title.
+ *    upload          - true if this is an upload form.
+ *    width           - The optional set width of the form.
  *
  * options.fields is a dictionary with the following fields:
  *
@@ -186,7 +186,7 @@ $.fn.formDlg = function(options) {
         action: ".",
         confirmLabel: "Send",
         fields: {},
-        path: "",
+        dataStoreObject: null,
         success: function() { window.location.reload(); },
         title: "",
         upload: false,
@@ -292,28 +292,28 @@ $.fn.formDlg = function(options) {
          * Sends the form data to the server.
          */
         function send() {
-            rbApiCall({
-                path: options.path,
-                form: form,
-                buttons: $("input:button", self.modalBox("buttons")),
-                errorPrefix: "Saving the form failed due to a server error:",
-                success: function(rsp) {
-                    checkForErrors(rsp);
+            options.dataStoreObject.setForm(form);
+            options.dataStoreObject.save(
+                $("input:button", self.modalBox("buttons")),
+                function(rsp) { // success
+                    options.success(rsp);
+                    box.remove();
+                },
+                function(rsp) { // error
+                    console.log(rsp);
+                    displayErrors(rsp);
                 }
-            });
+            );
         }
 
 
         /*
-         * Checks the server response for errors, displaying any on the form.
+         * Displays errors on the form.
          *
          * @param {object} rsp  The server response.
          */
-        function checkForErrors(rsp) {
-            if (rsp.stat == "ok") {
-                options.success(rsp);
-                box.remove();
-            } else if (rsp.fields) {
+        function displayErrors(rsp) {
+            if (rsp.fields) {
                 errors
                     .html(rsp.err.msg)
                     .show();

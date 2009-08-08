@@ -1264,11 +1264,11 @@ function initScreenshotDnD() {
         var screenshot = gReviewRequest.createScreenshot();
         screenshot.setData(file.name, file.blob);
         screenshot.save(gDraftBannerButtons,
-            function(screenshot) {
+            function(rsp, screenshot) {
                 thumb.replaceWith($.screenshotThumbnail(screenshot));
                 gDraftBanner.show();
             },
-            function(msg) {
+            function(rsp, msg) {
                 showError("Uploading the screenshot has failed: " + msg);
                 thumb.remove();
             }

@@ -159,6 +159,42 @@ $.extend(RB.Diff.prototype, {
         });
     },
 
+    setForm: function(form) {
+        this.form = form;
+    },
+
+    save: function(buttons, onSuccess, onError) {
+        if (this.id != undefined) {
+            /* TODO: Support updating screenshots eventually. */
+            onError("The diff " + this.id + " was already created. " +
+                    "This is a script error. Please report it.");
+            return;
+        }
+
+        if (!this.form) {
+            onError("No data has been set for this screenshot. This " +
+                    "is a script error. Please report it.");
+            return;
+        }
+
+        rbApiCall({
+            path: '/reviewrequests/' + this.review_request.id + '/diff/new/',
+            form: this.form,
+            buttons: buttons,
+            errorPrefix: "Uploading the diff has failed " +
+                         "due to a server error:",
+            success: function(rsp) {
+                if (rsp.stat == "ok") {
+                    if ($.isFunction(onSuccess)) {
+                        onSuccess(rsp);
+                    }
+                } else if ($.isFunction(onError)) {
+                    onError(rsp, rsp.err.msg);
+                }
+            }
+        });
+    },
+
     _getRevisionString: function() {
         var revision = this.revision;
 
@@ -449,9 +485,12 @@ RB.Screenshot = function(review_request, id) {
 }
 
 $.extend(RB.Screenshot.prototype, {
-    setData: function(filename, blob) {
-        this.filename = filename;
-        this.blob = blob;
+    setFile: function(file) {
+        this.file = file;
+    },
+
+    setForm: function(form) {
+        this.form = form;
     },
 
     save: function(buttons, onSuccess, onError) {
@@ -462,6 +501,28 @@ $.extend(RB.Screenshot.prototype, {
             return;
         }
 
+        if (this.form) {
+            this._saveForm(buttons, onSuccess, onError);
+        }
+        else if (this.file) {
+            this._saveFile(buttons, onSuccess, onError);
+        }
+        else {
+            onError("No data has been set for this screenshot. This " +
+                    "is a script error. Please report it.");
+            return;
+        }
+    },
+
+    _saveForm: function(buttons, onSuccess, onError) {
+        this._saveApiCall(onSuccess, onError, {
+            path: 'new/',
+            buttons: buttons,
+            form: this.form
+        });
+    },
+
+    _saveFile: function(buttons, onSuccess, onError) {
         var blobBuilder;
 
         try {
@@ -476,10 +537,10 @@ $.extend(RB.Screenshot.prototype, {
         var boundary = "-----multipartformboundary" + new Date().getTime();
         blobBuilder.append("--" + boundary + "\r\n");
         blobBuilder.append('Content-Disposition: form-data; name="path"; ' +
-                           'filename="' + this.filename + '"\r\n');
+                           'filename="' + this.file.name + '"\r\n');
         blobBuilder.append('Content-Type: application/octet-stream\r\n');
         blobBuilder.append('\r\n');
-        blobBuilder.append(this.blob);
+        blobBuilder.append(this.file.blob);
         blobBuilder.append('\r\n');
         blobBuilder.append("--" + boundary + "--\r\n");
         blobBuilder.append('\r\n');
@@ -494,9 +555,8 @@ $.extend(RB.Screenshot.prototype, {
             return false;
         }
 
-        rbApiCall({
-            path: '/reviewrequests/' + this.review_request.id +
-                  '/screenshot/new/',
+        this._saveApiCall(onSuccess, onError, {
+            path: 'new/',
             buttons: buttons,
             data: blob,
             processData: false,
@@ -504,16 +564,25 @@ $.extend(RB.Screenshot.prototype, {
             xhr: function() {
                 return google.gears.factory.create("beta.httprequest");
             },
+        });
+    },
+
+    _saveApiCall: function(onSuccess, onError, options) {
+        rbApiCall($.extend(options, {
+            path: '/reviewrequests/' + this.review_request.id +
+                  '/screenshot/' + options.path,
             errorPrefix: "Uploading the screenshot has failed " +
                          "due to a server error:",
             success: function(rsp) {
                 if (rsp.stat == "ok") {
-                    onSuccess(screenshot);
-                } else {
-                    onError(rsp.err.msg);
+                    if ($.isFunction(onSuccess)) {
+                        onSuccess(rsp, rsp.screenshot);
+                    }
+                } else if ($.isFunction(onError)) {
+                    onError(rsp, rsp.err.msg);
                 }
             }
-        });
+        }));
     }
 });
 
