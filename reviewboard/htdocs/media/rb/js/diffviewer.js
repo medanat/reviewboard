@@ -11,8 +11,7 @@ var ANCHOR_CHUNK = 4;
 
 
 // State
-var gDiffViewer = new RB.DiffViewer(gReviewRequestId, gRevision,
-                                    gInterdiffRevision);
+var gDiff = new RB.Diff(gReviewRequestId, gRevision, gInterdiffRevision);
 
 
 /*
@@ -925,8 +924,7 @@ function addCommentFlags(table, lines) {
  * @param {string} tbody_id     The tbody ID to insert into.
  */
 function expandChunk(fileid, filediff_id, chunk_index, link) {
-    gDiffViewer.getDiffFragment(fileid, filediff_id, chunk_index,
-                                function(html) {
+    gDiff.getDiffFragment(fileid, filediff_id, chunk_index, function(html) {
         var tbody = $(link).parents("tbody.collapsed");
         var table = tbody.parent();
 
@@ -1049,7 +1047,7 @@ function loadFileDiff(filediff_id, filediff_revision,
         }
 
         $.funcQueue("diff_files").add(function() {
-            gDiffViewer.getDiffFile(filediff_id, file_index, onFileLoaded);
+            gDiff.getDiffFile(filediff_id, file_index, onFileLoaded);
         });
     }
 

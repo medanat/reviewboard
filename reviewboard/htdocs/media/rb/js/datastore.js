@@ -124,7 +124,7 @@ $.extend(RB.DiffComment.prototype, {
 });
 
 
-RB.DiffViewer = function(review_request_id, revision, interdiff_revision) {
+RB.Diff = function(review_request_id, revision, interdiff_revision) {
     this.review_request_id = review_request_id;
     this.revision = revision;
     this.interdiff_revision = interdiff_revision;
@@ -132,7 +132,7 @@ RB.DiffViewer = function(review_request_id, revision, interdiff_revision) {
     return this;
 }
 
-$.extend(RB.DiffViewer.prototype, {
+$.extend(RB.Diff.prototype, {
     getDiffFragment: function(fileid, filediff_id, chunk_index, onSuccess) {
         rbApiCall({
             url: SITE_ROOT + 'r/' + this.review_request_id + '/diff/' +
