@@ -104,10 +104,19 @@ $.extend(RB.DiffComment.prototype, {
             interfilediff_id = this.interfilediff['id'];
         }
 
+        var filediff_revision = this.filediff['revision'];
+        var filediff_id = this.filediff['id'];
+
         return getReviewRequestAPIPath(true) +
-               getDiffAPIPath(this.filediff['revision'], this.filediff['id'],
-                              interfilediff_revision, interfilediff_id,
-                              this.beginLineNum);
+               "/diff/" +
+               (interfilediff_revision == null
+                ? filediff_revision
+                : filediff_revision + "-" + interfilediff_revision) +
+               "/file/" +
+               (interfilediff_id == null
+                ? filediff_id
+                : filediff_id + "-" + interfilediff_id) +
+               "/line/" + this.beginLineNum + "/comments/";
     }
 });
 
@@ -588,11 +597,9 @@ $.extend(RB.ScreenshotComment.prototype, {
      */
     _getURL: function() {
         return getReviewRequestAPIPath(true) +
-               getScreenshotAPIPath(gScreenshotId,
-                                    Math.round(this.x),
-                                    Math.round(this.y),
-                                    Math.round(this.width),
-                                    Math.round(this.height));
+               "/s" + gScreenshotId + "/comments/" +
+               Math.round(this.width) + "x" + Math.round(this.height) +
+               "+" + Math.round(this.x) + "+" + Math.round(this.y) + "/";
     }
 });
 

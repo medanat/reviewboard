@@ -67,36 +67,6 @@ function getReviewDraftAPIPath() {
 
 
 /*
- * Returns the API path for diff comments relative to the review request
- * API tree.
- *
- * If dealing with interdiffs, interfilediff_revision and interfilediff_id
- * must not be null. Otherwise, they must both be null.
- *
- * @param {string} filediff_revision       The filediff revision.
- * @param {int}    filediff_id             The filediff ID.
- * @param {string} interfilediff_revision  The optional interfilediff revision.
- * @param {int}    interfilediff_id        The optional interfilediff ID.
- * @param {int}    beginLineNum            The beginning comment line number.
- *
- * @return {string} The API path.
- */
-function getDiffAPIPath(filediff_revision, filediff_id,
-                        interfilediff_revision, interfilediff_id,
-                        beginLineNum) {
-    return "/diff/" +
-           (interfilediff_revision == null
-            ? filediff_revision
-            : filediff_revision + "-" + interfilediff_revision) +
-           "/file/" +
-           (interfilediff_id == null
-            ? filediff_id
-            : filediff_id + "-" + interfilediff_id) +
-           "/line/" + beginLineNum + "/comments/";
-}
-
-
-/*
  * Converts an array of items to a list of hyperlinks.
  *
  * By default, this will use the item as the URL and as the hyperlink text.
