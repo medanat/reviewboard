@@ -139,7 +139,8 @@ jQuery.extend(CommentBlock.prototype, {
 
         var self = this;
         var el = this.el;
-        var comment = new RB.ScreenshotComment(this.x, this.y, this.width,
+        var comment = new RB.ScreenshotComment(gScreenshotId,
+                                               this.x, this.y, this.width,
                                                this.height, textOnServer);
 
         $.event.add(comment, "textChanged", function() {

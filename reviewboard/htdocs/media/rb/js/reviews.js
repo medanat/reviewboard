@@ -874,26 +874,11 @@ $.reviewForm = function(review) {
 /*
  * Adds inline editing capabilities to a comment in the review form.
  *
- * options has the following fields:
- *
- *    path     - The relative API path.
- *    textKey  - The key in the data sent to the server containing the
- *               comment text.
- *    data     - The data sent to the server. Unless overridden, this has
- *               the field "action" set to "set".
- *
- * @param {object} options  The options, listed above.
+ * @param {object} comment  A RB.DiffComment or RB.ScreenshotComment instance
+ *                          to store the text on and save.
  */
-$.fn.reviewFormCommentEditor = function(options) {
+$.fn.reviewFormCommentEditor = function(comment) {
     var self = this;
-
-    options = $.extend({
-        path: "",
-        textKey: "text",
-        data: {
-            action: "set"
-        }
-    }, options);
 
     return this
         .inlineEditor({
@@ -906,13 +891,9 @@ $.fn.reviewFormCommentEditor = function(options) {
             useEditIconOnly: false
         })
         .bind("complete", function(e, value) {
-            options.data[options.textKey] = value;
-
-            rbApiCall({
-                path: "/reviewrequests/" + gReviewRequestId + "/" +
-                      options.path,
-                data: options.data,
-                success: function() { self.trigger("saved"); }
+            comment.text = value;
+            comment.save(function() {
+                self.trigger("saved");
             });
         });
 };

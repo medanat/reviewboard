@@ -35,7 +35,7 @@ $.extend(RB.DiffComment.prototype, {
     /*
      * Saves the comment on the server.
      */
-    save: function() {
+    save: function(onSuccess) {
         var self = this;
 
         rbApiCall({
@@ -48,6 +48,10 @@ $.extend(RB.DiffComment.prototype, {
             success: function() {
                 self.saved = true;
                 $.event.trigger("saved", null, self);
+
+                if ($.isFunction(onSuccess)) {
+                    onSuccess();
+                }
             }
         });
     },
@@ -510,7 +514,9 @@ $.extend(RB.Screenshot.prototype, {
 });
 
 
-RB.ScreenshotComment = function(x, y, width, height, textOnServer) {
+RB.ScreenshotComment = function(screenshot_id, x, y, width, height,
+                                textOnServer) {
+    this.screenshot_id = screenshot_id;
     this.x = x;
     this.y = y;
     this.width = width;
@@ -535,7 +541,7 @@ $.extend(RB.ScreenshotComment.prototype, {
     /*
      * Saves the comment on the server.
      */
-    save: function() {
+    save: function(onSuccess) {
         var self = this;
 
         rbApiCall({
@@ -547,6 +553,10 @@ $.extend(RB.ScreenshotComment.prototype, {
             success: function() {
                 self.saved = true;
                 $.event.trigger("saved", null, self);
+
+                if ($.isFunction(onSuccess)) {
+                    onSuccess();
+                }
             }
         });
     },
@@ -558,7 +568,6 @@ $.extend(RB.ScreenshotComment.prototype, {
         var self = this;
 
         if (this.saved) {
-            console.log("Calling delete");
             rbApiCall({
                 path: this._getURL(),
                 data: {
@@ -596,7 +605,7 @@ $.extend(RB.ScreenshotComment.prototype, {
      */
     _getURL: function() {
         return "/reviewrequests/" + gReviewRequestId + "/s/" +
-               gScreenshotId + "/comments/" +
+               this.screenshot_id + "/comments/" +
                Math.round(this.width) + "x" + Math.round(this.height) +
                "+" + Math.round(this.x) + "+" + Math.round(this.y) + "/";
     }
