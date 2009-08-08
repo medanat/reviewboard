@@ -784,7 +784,9 @@ $.reviewForm = function(review) {
                     $('<input type="button"/>')
                         .val("Discard Review")
                         .click(function(e) {
-                            review.deleteReview(buttons);
+                            review.deleteReview({
+                                buttons: buttons
+                            });
                         }),
                     $('<input type="button"/>')
                         .val("Cancel"),
@@ -843,13 +845,16 @@ $.reviewForm = function(review) {
             review.body_top = $(".body-top", dlg).text();;
             review.body_bottom = $(".body-bottom", dlg).text();;
 
-            var onNext = $.funcQueue("reviewForm").next;
+            var options = {
+                buttons: buttons,
+                success: $.funcQueue("reviewForm").next
+            };
 
             if (publish) {
-                review.publish(buttons, onNext);
+                review.publish(options);
             }
             else {
-                review.save(buttons, onNext);
+                review.save(options);
             }
         });
 
@@ -892,8 +897,10 @@ $.fn.reviewFormCommentEditor = function(comment) {
         })
         .bind("complete", function(e, value) {
             comment.text = value;
-            comment.save(function() {
-                self.trigger("saved");
+            comment.save({
+                success: function() {
+                    self.trigger("saved");
+                }
             });
         });
 };
@@ -1263,16 +1270,17 @@ function initScreenshotDnD() {
 
         var screenshot = gReviewRequest.createScreenshot();
         screenshot.setFile(file);
-        screenshot.save(gDraftBannerButtons,
-            function(rsp, screenshot) {
+        screenshot.save({
+            buttons: gDraftBannerButtons,
+            success: function(rsp, screenshot) {
                 thumb.replaceWith($.screenshotThumbnail(screenshot));
                 gDraftBanner.show();
             },
-            function(rsp, msg) {
+            error: function(rsp, msg) {
                 showError("Uploading the screenshot has failed: " + msg);
                 thumb.remove();
             }
-        );
+        });
     }
 }
 
@@ -1370,11 +1378,14 @@ $(document).ready(function() {
 
     /* Review banner's Publish button. */
     $("#review-banner-publish").click(function() {
-        pendingReview.publish($("input", gReviewBanner), function() {
-            hideReviewBanner();
-            gReviewBanner.queue(function() {
-                window.location = gReviewRequestPath;
-            });
+        pendingReview.publish({
+            buttons: $("input", gReviewBanner),
+            success: function() {
+                hideReviewBanner();
+                gReviewBanner.queue(function() {
+                    window.location = gReviewRequestPath;
+                });
+            }
         });
     });
 
@@ -1389,15 +1400,15 @@ $(document).ready(function() {
                     $('<input type="button" value="Cancel"/>'),
                     $('<input type="button" value="Discard"/>')
                         .click(function(e) {
-                            pendingReview.deleteReview(
-                                $("input", gReviewBanner),
-                                function() {
+                            pendingReview.deleteReview({
+                                buttons: $("input", gReviewBanner),
+                                success: function() {
                                     hideReviewBanner();
                                     gReviewBanner.queue(function() {
                                         window.location = gReviewRequestPath;
                                     });
                                 }
-                            );
+                            });
                         })
                 ]
             });

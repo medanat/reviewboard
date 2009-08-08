@@ -35,8 +35,9 @@ $.extend(RB.DiffComment.prototype, {
     /*
      * Saves the comment on the server.
      */
-    save: function(onSuccess) {
+    save: function(options) {
         var self = this;
+        options = options || {};
 
         rbApiCall({
             path: this._getURL(),
@@ -49,8 +50,8 @@ $.extend(RB.DiffComment.prototype, {
                 self.saved = true;
                 $.event.trigger("saved", null, self);
 
-                if ($.isFunction(onSuccess)) {
-                    onSuccess();
+                if ($.isFunction(options.success)) {
+                    options.success();
                 }
             }
         });
@@ -163,33 +164,36 @@ $.extend(RB.Diff.prototype, {
         this.form = form;
     },
 
-    save: function(buttons, onSuccess, onError) {
+    save: function(options) {
+        options = $.extend(true, {
+            success: function() {},
+            error: function() {}
+        }, options);
+
         if (this.id != undefined) {
             /* TODO: Support updating screenshots eventually. */
-            onError("The diff " + this.id + " was already created. " +
-                    "This is a script error. Please report it.");
+            options.error("The diff " + this.id + " was already created. " +
+                          "This is a script error. Please report it.");
             return;
         }
 
         if (!this.form) {
-            onError("No data has been set for this screenshot. This " +
-                    "is a script error. Please report it.");
+            options.error("No data has been set for this screenshot. This " +
+                          "is a script error. Please report it.");
             return;
         }
 
         rbApiCall({
             path: '/reviewrequests/' + this.review_request.id + '/diff/new/',
             form: this.form,
-            buttons: buttons,
+            buttons: options.buttons,
             errorPrefix: "Uploading the diff has failed " +
                          "due to a server error:",
             success: function(rsp) {
                 if (rsp.stat == "ok") {
-                    if ($.isFunction(onSuccess)) {
-                        onSuccess(rsp);
-                    }
-                } else if ($.isFunction(onError)) {
-                    onError(rsp, rsp.err.msg);
+                    options.success(rsp);
+                } else {
+                    options.error(rsp, rsp.err.msg);
                 }
             }
         });
@@ -388,7 +392,7 @@ $.extend(RB.Review.prototype, {
         return this.draft_reply;
     },
 
-    save: function(buttons, onSuccess) {
+    save: function(options) {
         this._apiCall({
             path: "save/",
             data: {
@@ -396,12 +400,12 @@ $.extend(RB.Review.prototype, {
                 body_top: this.body_top,
                 body_bottom: this.body_bottom,
             },
-            buttons: buttons,
-            success: onSuccess
+            buttons: options.buttons,
+            success: options.success
         });
     },
 
-    publish: function(buttons, onSuccess) {
+    publish: function(options) {
         this._apiCall({
             path: "publish/",
             data: {
@@ -409,16 +413,16 @@ $.extend(RB.Review.prototype, {
                 body_top: this.body_top,
                 body_bottom: this.body_bottom,
             },
-            buttons: buttons,
-            success: onSuccess
+            buttons: options.buttons,
+            success: options.success
         });
     },
 
-    deleteReview: function(buttons, onSuccess) {
+    deleteReview: function(options) {
         this._apiCall({
             path: "delete/",
-            buttons: buttons,
-            success: onSuccess
+            buttons: options.buttons,
+            success: options.onSuccess
         });
     },
 
@@ -516,44 +520,51 @@ $.extend(RB.Screenshot.prototype, {
         this.form = form;
     },
 
-    save: function(buttons, onSuccess, onError) {
+    save: function(options) {
+        options = $.extend(true, {
+            success: function() {},
+            error: function() {}
+        }, options);
+
         if (this.id != undefined) {
             /* TODO: Support updating screenshots eventually. */
-            onError("The screenshot " + this.id + " was already created. " +
-                    "This is a script error. Please report it.");
+            options.error("The screenshot " + this.id + " was already " +
+                          "created. This is a script error. Please " +
+                          "report it.");
             return;
         }
 
         if (this.form) {
-            this._saveForm(buttons, onSuccess, onError);
+            this._saveForm(options);
         }
         else if (this.file) {
-            this._saveFile(buttons, onSuccess, onError);
+            this._saveFile(options);
         }
         else {
-            onError("No data has been set for this screenshot. This " +
-                    "is a script error. Please report it.");
+            options.error("No data has been set for this screenshot. This " +
+                          "is a script error. Please report it.");
             return;
         }
     },
 
-    _saveForm: function(buttons, onSuccess, onError) {
-        this._saveApiCall(onSuccess, onError, {
+    _saveForm: function(options) {
+        this._saveApiCall(options.success, options.error, {
             path: 'new/',
-            buttons: buttons,
+            buttons: options.buttons,
             form: this.form
         });
     },
 
-    _saveFile: function(buttons, onSuccess, onError) {
+    _saveFile: function(options) {
         var blobBuilder;
 
         try {
             blobBuilder = google.gears.factory.create("beta.blobbuilder");
         }
         catch (e) {
-            onError("RB.Screenshot.save requires Google Gears, which was " +
-                    "not found. This is a script error. Please report it.");
+            options.error("RB.Screenshot.save requires Google Gears, " +
+                          "which was not found. This is a script error. " +
+                          "Please report it.");
             return;
         }
 
@@ -578,9 +589,9 @@ $.extend(RB.Screenshot.prototype, {
             return false;
         }
 
-        this._saveApiCall(onSuccess, onError, {
+        this._saveApiCall(options.success, options.error, {
             path: 'new/',
-            buttons: buttons,
+            buttons: options.buttons,
             data: blob,
             processData: false,
             contentType: "multipart/form-data; boundary=" + boundary,
@@ -637,7 +648,11 @@ $.extend(RB.ScreenshotComment.prototype, {
     /*
      * Saves the comment on the server.
      */
-    save: function(onSuccess) {
+    save: function(options) {
+        options = $.extend({
+            success: function() {}
+        }, options);
+
         var self = this;
 
         rbApiCall({
@@ -649,10 +664,7 @@ $.extend(RB.ScreenshotComment.prototype, {
             success: function() {
                 self.saved = true;
                 $.event.trigger("saved", null, self);
-
-                if ($.isFunction(onSuccess)) {
-                    onSuccess();
-                }
+                options.success();
             }
         });
     },

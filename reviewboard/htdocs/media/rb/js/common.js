@@ -208,17 +208,17 @@ $.fn.formDlg = function(options) {
          */
         function send() {
             options.dataStoreObject.setForm(form);
-            options.dataStoreObject.save(
-                $("input:button", self.modalBox("buttons")),
-                function(rsp) { // success
+            options.dataStoreObject.save({
+                buttons: $("input:button", self.modalBox("buttons")),
+                success: function(rsp) {
                     options.success(rsp);
                     box.remove();
                 },
-                function(rsp) { // error
+                error: function(rsp) { // error
                     console.log(rsp);
                     displayErrors(rsp);
                 }
-            );
+            });
         }
 
 
