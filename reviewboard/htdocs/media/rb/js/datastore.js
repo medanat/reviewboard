@@ -355,6 +355,14 @@ $.extend(RB.Review.prototype, {
         });
     },
 
+    deleteReview: function(buttons, onSuccess) {
+        this._apiCall({
+            path: "delete/",
+            buttons: buttons,
+            success: onSuccess
+        });
+    },
+
     _apiCall: function(options) {
         var self = this;
 

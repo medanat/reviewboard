@@ -1493,15 +1493,11 @@ $(document).ready(function() {
 
     /* Review banner's Publish button. */
     $("#review-banner-publish").click(function() {
-        reviewRequestApiCall({
-            path: getReviewDraftAPIPath() + "/publish/",
-            buttons: $("input", gReviewBanner),
-            success: function() {
-                hideReviewBanner();
-                gReviewBanner.queue(function() {
-                    window.location = gReviewRequestPath;
-                });
-            }
+        pendingReview.publish($("input", gReviewBanner), function() {
+            hideReviewBanner();
+            gReviewBanner.queue(function() {
+                window.location = gReviewRequestPath;
+            });
         });
     });
 
@@ -1516,16 +1512,15 @@ $(document).ready(function() {
                     $('<input type="button" value="Cancel"/>'),
                     $('<input type="button" value="Discard"/>')
                         .click(function(e) {
-                            reviewRequestApiCall({
-                                path: getReviewDraftAPIPath() + "/delete/",
-                                buttons: $("input", gReviewBanner),
-                                success: function() {
+                            pendingReview.deleteReview(
+                                $("input", gReviewBanner),
+                                function() {
                                     hideReviewBanner();
                                     gReviewBanner.queue(function() {
                                         window.location = gReviewRequestPath;
                                     });
                                 }
-                            });
+                            );
                         })
                 ]
             });
