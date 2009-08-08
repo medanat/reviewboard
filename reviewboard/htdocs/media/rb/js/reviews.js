@@ -56,17 +56,6 @@ function getReviewRequestAPIPath(fullPath) {
 
 
 /*
- * Returns the API path of the current review draft relative to the
- * review request API tree.
- *
- * @return {string} The API path.
- */
-function getReviewDraftAPIPath() {
-    return "/reviews/draft";
-}
-
-
-/*
  * Converts an array of items to a list of hyperlinks.
  *
  * By default, this will use the item as the URL and as the hyperlink text.
