@@ -354,17 +354,24 @@ $.fn.toggleStar = function(type, objid, default_) {
         var STAR_ON_IMG = MEDIA_URL + "rb/images/star_on.png?" + MEDIA_SERIAL;
         var STAR_OFF_IMG = MEDIA_URL + "rb/images/star_off.png?" + MEDIA_SERIAL;
 
+        var obj;
         var on = default_;
-        var baseURL = "/" + type + "/" + objid;
 
         self.click(function() {
             on = !on;
 
-            rbApiCall({
-                path: baseURL + (on ? "/star/" : "/unstar/"),
-                data: {}
-            });
+            if (!obj) {
+                if (type == "reviewrequests") {
+                    obj = new RB.ReviewRequest(objid);
+                } else if (type == "groups") {
+                    obj = new RB.ReviewGroup(objid);
+                } else {
+                    self.remove();
+                    return;
+                }
+            }
 
+            obj.setStarred(on);
             self.attr("src", (on ? STAR_ON_IMG : STAR_OFF_IMG));
         });
     });

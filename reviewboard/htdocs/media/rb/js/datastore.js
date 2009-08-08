@@ -259,6 +259,13 @@ $.extend(RB.ReviewRequest.prototype, {
         });
     },
 
+    setStarred: function(starred) {
+        this._apiCall({
+            path: (starred ? "/star/" : "/unstar/"),
+            success: function() {}
+        });
+    },
+
     publish: function() {
         this._apiCall({
             path: "/publish/",
@@ -426,6 +433,22 @@ $.extend(RB.Review.prototype, {
         }
 
         rbApiCall(options);
+    }
+});
+
+
+RB.ReviewGroup = function(id) {
+    this.id = id;
+
+    return this;
+}
+
+$.extend(RB.ReviewGroup.prototype, {
+    setStarred: function(starred) {
+        rbApiCall({
+            path: "/groups/" + this.id + (starred ? "/star/" : "/unstar/"),
+            success: function() {}
+        });
     }
 });
 
