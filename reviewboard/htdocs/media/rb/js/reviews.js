@@ -115,38 +115,6 @@ function getScreenshotAPIPath(screenshotId, x, y, width, height) {
 
 
 /*
- * Convenience wrapper for review request API functions. This will handle
- * any button disabling/enabling, write to the correct path prefix, and
- * provides default functionality for reloading the page upon success
- * (unless overridden) and displaying server errors.
- *
- * options has the following fields:
- *
- *    buttons  - An optional list of buttons to disable/enable.
- *    type     - The request type (defaults to "POST").
- *    path     - The relative path to the review request API tree.
- *    data     - Data to send with the request.
- *    success  - An optional success callback. The default one will reload
- *               the page.
- *    error    - An optional error callback, called after the error banner
- *               is displayed.
- *    complete - An optional complete callback, called after the success or
- *               error callbacks.
- *
- * @param {object} options  The options, listed above.
- */
-function reviewRequestApiCall(options) {
-    options.path = getReviewRequestAPIPath() + options.path;
-
-    if (!options.success) {
-        options.success = function() { window.location = gReviewRequestPath; };
-    }
-
-    rbApiCall(options);
-}
-
-
-/*
  * Converts an array of items to a list of hyperlinks.
  *
  * By default, this will use the item as the URL and as the hyperlink text.
@@ -1013,8 +981,8 @@ $.fn.reviewFormCommentEditor = function(options) {
         .bind("complete", function(e, value) {
             options.data[options.textKey] = value;
 
-            reviewRequestApiCall({
-                path: options.path,
+            rbApiCall({
+                path: getReviewRequestAPIPath() + options.path,
                 data: options.data,
                 success: function() { self.trigger("saved"); }
             });
