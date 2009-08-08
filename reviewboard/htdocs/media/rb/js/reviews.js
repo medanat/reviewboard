@@ -1262,7 +1262,7 @@ function initScreenshotDnD() {
             .fadeTo(1000, 1);
 
         var screenshot = gReviewRequest.createScreenshot();
-        screenshot.setData(file.name, file.blob);
+        screenshot.setFile(file);
         screenshot.save(gDraftBannerButtons,
             function(rsp, screenshot) {
                 thumb.replaceWith($.screenshotThumbnail(screenshot));
