@@ -97,24 +97,6 @@ function getDiffAPIPath(filediff_revision, filediff_id,
 
 
 /*
- * Returns the API path for screenshot comments relative to the review request
- * API tree.
- *
- * @param {int} screenshotId  The screenshot ID.
- * @param {int} x             The comment X location.
- * @param {int} y             The comment Y location.
- * @param {int} width         The comment width.
- * @param {int} height        The comment height.
- *
- * @return {string} The API path.
- */
-function getScreenshotAPIPath(screenshotId, x, y, width, height) {
-    return "/s/" + screenshotId + "/comments/" + width + "x" + height +
-           "+" + x + "+" + y + "/";
-}
-
-
-/*
  * Converts an array of items to a list of hyperlinks.
  *
  * By default, this will use the item as the URL and as the hyperlink text.
