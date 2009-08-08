@@ -124,8 +124,8 @@ $.extend(RB.DiffComment.prototype, {
 });
 
 
-RB.Diff = function(review_request_id, revision, interdiff_revision) {
-    this.review_request_id = review_request_id;
+RB.Diff = function(review_request, revision, interdiff_revision) {
+    this.review_request = review_request;
     this.revision = revision;
     this.interdiff_revision = interdiff_revision;
 
@@ -135,7 +135,7 @@ RB.Diff = function(review_request_id, revision, interdiff_revision) {
 $.extend(RB.Diff.prototype, {
     getDiffFragment: function(fileid, filediff_id, chunk_index, onSuccess) {
         rbApiCall({
-            url: SITE_ROOT + 'r/' + this.review_request_id + '/diff/' +
+            url: SITE_ROOT + 'r/' + this.review_request.id + '/diff/' +
                  this._getRevisionString() + '/fragment/' + filediff_id +
                  '/chunk/' + chunk_index + '/',
             data: {},
@@ -152,7 +152,7 @@ $.extend(RB.Diff.prototype, {
     getDiffFile: function(filediff_id, file_index, onSuccess) {
         $.ajax({
             type: "GET",
-            url: SITE_ROOT + "r/" + this.review_request_id + "/diff/" +
+            url: SITE_ROOT + "r/" + this.review_request.id + "/diff/" +
                  this._getRevisionString() + "/fragment/" + filediff_id +
                  "/?index=" + file_index + "&" + AJAX_SERIAL,
             complete: onSuccess
@@ -188,6 +188,10 @@ $.extend(RB.ReviewRequest.prototype, {
     CLOSE_SUBMITTED: 2,
 
     /* Review request API */
+    createDiff: function(revision, interdiff_revision) {
+        return new RB.Diff(this, revision, interdiff_revision);
+    },
+
     createReview: function(review_id) {
         if (review_id == undefined) {
             if (this.draft_review == null) {

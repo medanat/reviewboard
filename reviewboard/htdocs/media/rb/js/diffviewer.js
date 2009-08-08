@@ -11,7 +11,7 @@ var ANCHOR_CHUNK = 4;
 
 
 // State
-var gDiff = new RB.Diff(gReviewRequestId, gRevision, gInterdiffRevision);
+var gDiff;
 
 
 /*
@@ -1132,6 +1132,8 @@ function toggleWhitespaceChunks()
 
 
 $(document).ready(function() {
+    gDiff = gReviewRequest.createDiff(gRevision, gInterdiffRevision);
+
     $(document).keypress(function(evt) {
         if (evt.altKey || evt.ctrlKey || evt.metaKey) {
             return;
