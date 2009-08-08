@@ -211,10 +211,9 @@ $.extend(RB.Diff.prototype, {
 });
 
 
-RB.ReviewRequest = function(id, path, buttons) {
+RB.ReviewRequest = function(id, path) {
     this.id = id;
     this.path = path;
-    this.buttons = buttons;
     this.reviews = {};
     this.draft_review = null;
 
@@ -270,59 +269,67 @@ $.extend(RB.ReviewRequest.prototype, {
         });
     },
 
-    publish: function() {
+    publish: function(options) {
+        options = $.extend(true, {}, options);
+
         this._apiCall({
             path: "/publish/",
-            buttons: this.buttons,
+            buttons: options.buttons,
             errorPrefix: "Publishing the draft has failed due to a " +
                          "server error:"
         });
     },
 
-    discardDraft: function() {
+    discardDraft: function(options) {
+        options = $.extend(true, {}, options);
+
         this._apiCall({
             path: "/draft/discard/",
-            buttons: this.buttons,
+            buttons: options.buttons,
             errorPrefix: "Discarding the draft has failed due to a " +
                          "server error:"
         });
     },
 
-    close: function(type) {
-        if (type == this.CLOSE_DISCARDED) {
+    close: function(options) {
+        if (options.type == this.CLOSE_DISCARDED) {
             this._apiCall({
                 path: "/close/discarded/",
-                buttons: this.buttons,
+                buttons: options.buttons,
                 errorPrefix: "Discarding the review request has failed " +
                              "due to a server error:"
             });
         }
-        else if (type == this.CLOSE_SUBMITTED) {
+        else if (options.type == this.CLOSE_SUBMITTED) {
             this._apiCall({
                 path: "/close/submitted/",
-                buttons: this.buttons,
+                buttons: options.buttons,
                 errorPrefix: "Setting the review request as submitted " +
                              "has failed due to a server error:"
             });
         }
     },
 
-    reopen: function() {
+    reopen: function(options) {
+        options = $.extend(true, {}, options);
+
         this._apiCall({
             path: "/reopen/",
-            buttons: this.buttons,
+            buttons: options.buttons,
             errorPrefix: "Reopening the review request has failed " +
                          "due to a server error:"
         });
     },
 
-    deletePermanently: function(buttons, onSuccess) {
+    deletePermanently: function(options) {
+        options = $.extend(true, {}, options);
+
         this._apiCall({
             path: "/delete/",
-            buttons: this.buttons.add(buttons), // XXX
+            buttons: options.buttons,
             errorPrefix: "Deleting the review request has failed " +
                          "due to a server error:",
-            success: onSuccess
+            success: options.success
         });
     },
 
@@ -422,7 +429,7 @@ $.extend(RB.Review.prototype, {
         this._apiCall({
             path: "delete/",
             buttons: options.buttons,
-            success: options.onSuccess
+            success: options.success
         });
     },
 

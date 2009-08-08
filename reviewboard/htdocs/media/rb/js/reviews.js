@@ -6,8 +6,7 @@ var gReviewBanner = $("#review-banner");
 var gDraftBanner = $("#draft-banner");
 var gDraftBannerButtons = $("input", gDraftBanner);
 var gReviewRequest = new RB.ReviewRequest(gReviewRequestId,
-                                          gReviewRequestPath,
-                                          gDraftBannerButtons);
+                                          gReviewRequestPath);
 
 
 /*
@@ -142,6 +141,7 @@ function setDraftField(field, value) {
     gReviewRequest.setDraftField({
         field: field,
         value: value,
+        buttons: gDraftBannerButtons,
         success: function(rsp) {
             var func = gEditorCompleteHandlers[field];
 
@@ -239,7 +239,9 @@ function publishDraft() {
     } else if ($.trim($("#description").html()) == "") {
         alert("The draft must have a description.");
     } else {
-        gReviewRequest.publish();
+        gReviewRequest.publish({
+            buttons: gDraftBannerButtons
+        });
     }
 }
 
@@ -1327,13 +1329,18 @@ $(document).ready(function() {
     });
 
     $("#btn-draft-discard").click(function() {
-        gReviewRequest.discardDraft();
+        gReviewRequest.discardDraft({
+            options: gDraftBannerButtons
+        });
         return false;
     });
 
     $("#btn-review-request-discard, #discard-review-request-link")
         .click(function() {
-            gReviewRequest.close(RB.ReviewRequest.CLOSE_DISCARDED);
+            gReviewRequest.close({
+                type: RB.ReviewRequest.CLOSE_DISCARDED,
+                buttons: gDraftBannerButtons
+            });
             return false;
         });
 
@@ -1342,13 +1349,18 @@ $(document).ready(function() {
          * This is a non-destructive event, so don't confirm unless there's
          * a draft. (TODO)
          */
-        gReviewRequest.close(RB.ReviewRequest.CLOSE_SUBMITTED);
+        gReviewRequest.close({
+            type: RB.ReviewRequest.CLOSE_SUBMITTED,
+            buttons: gDraftBannerButtons
+        });
 
         return false;
     });
 
     $("#btn-review-request-reopen").click(function() {
-        gReviewRequest.reopen();
+        gReviewRequest.reopen({
+            buttons: gDraftBannerButtons
+        });
 
         return false;
     });
@@ -1363,12 +1375,13 @@ $(document).ready(function() {
                     $('<input type="button" value="Cancel"/>'),
                     $('<input type="button" value="Delete"/>')
                         .click(function(e) {
-                            gReviewRequest.deletePermanently(
-                                $("input", dlg.modalBox("buttons")),
-                                function() {
+                            gReviewRequest.deletePermanently({
+                                buttons: gDraftBannerButtons.add(
+                                    $("input", dlg.modalBox("buttons"))),
+                                success: function() {
                                     window.location = SITE_ROOT;
                                 }
-                            );
+                            });
                         })
                 ]
             });
