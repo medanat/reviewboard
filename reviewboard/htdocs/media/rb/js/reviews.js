@@ -362,6 +362,10 @@ function publishDraft() {
  */
 $.fn.commentSection = function(review_id, context_id, context_type) {
     var self = $(this);
+
+    var review = gReviewRequest.createReview(review_id);
+    var review_reply = review.createReply();
+
     var sectionId = context_id;
     var reviewEl = $("#review" + review_id);
     var commentsList = $(".reply-comments", self)
@@ -434,12 +438,8 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                 .bind("complete", function(e, value) {
                     self.html(linkifyText(self.text()));
 
-                    var comment = new RB.ReviewReplyComment(gReviewRequest.id,
-                                                            review_id,
-                                                            context_id,
-                                                            context_type);
-                    comment.value = value;
-                    comment.save(bannerButtonsEl, function() {
+                    review_reply.addComment(context_id, context_type, value,
+                                            bannerButtonsEl, function() {
                         removeCommentFormIfEmpty(self);
                         showReplyDraftBanner(review_id);
                     });
@@ -487,24 +487,16 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                 .append($('<input type="button"/>')
                     .val("Publish")
                     .click(function() {
-                        reviewRequestApiCall({
-                            path: '/reviews/' + review_id +
-                                  '/replies/draft/save/',
-                            buttons: bannerButtonsEl,
-                            errorText: "Saving the reply draft has " +
-                                       "failed due to a server error:"
+                        review_reply.publish(bannerButtonsEl, function() {
+                            window.location = gReviewRequestPath;
                         });
                     })
                 )
                 .append($('<input type="button"/>')
                     .val("Discard")
                     .click(function() {
-                        reviewRequestApiCall({
-                            path: '/reviews/' + review_id +
-                                  '/replies/draft/discard/',
-                            buttons: bannerButtonsEl,
-                            errorText: "Discarding the reply draft " +
-                                       "has failed due to a server error:"
+                        review_reply.discard(bannerButtonsEl, function() {
+                            window.location = gReviewRequestPath;
                         });
                     })
                 )
@@ -853,9 +845,11 @@ $.fn.commentDlg = function() {
  * review. The list of comments are retrieved from the server, providing
  * context for the comments.
  *
+ * @param {RB.Review} review  The review to create or modify.
+ *
  * @return {jQuery} The new review form element.
  */
-$.reviewForm = function() {
+$.reviewForm = function(review) {
     rbApiCall({
         type: "GET",
         dataType: "html",
@@ -868,6 +862,7 @@ $.reviewForm = function() {
     });
 
     var dlg;
+    var buttons;
 
     /*
      * Creates the actual review form. This is called once we have
@@ -894,7 +889,7 @@ $.reviewForm = function() {
                     $('<input type="button"/>')
                         .val("Discard Review")
                         .click(function(e) {
-                            reviewAction("delete");
+                            review.deleteReview(buttons);
                         }),
                     $('<input type="button"/>')
                         .val("Cancel"),
@@ -908,6 +903,8 @@ $.reviewForm = function() {
             })
             .keypress(function(e) { e.stopPropagation(); })
             .trigger("ready");
+
+        buttons = $("input", dlg);
 
         $(".body-top, .body-bottom", dlg)
             .inlineEditor({
@@ -947,20 +944,18 @@ $.reviewForm = function() {
         });
 
         $.funcQueue("reviewForm").add(function() {
-            reviewAction(publish ? "publish" : "save",
-                $.funcQueue("reviewForm").next,
-                {
-                    shipit: function() {
-                        return $("#id_shipit", dlg)[0].checked ? 1 : 0;
-                    },
-                    body_top: function() {
-                        return $(".body-top", dlg).text();
-                    },
-                    body_bottom: function() {
-                        return $(".body-bottom", dlg).text();
-                    }
-                }
-            );
+            review.shipit = $("#id_shipit", dlg)[0].checked ? 1 : 0;
+            review.body_top = $(".body-top", dlg).text();;
+            review.body_bottom = $(".body-bottom", dlg).text();;
+
+            var onNext = $.funcQueue("reviewForm").next;
+
+            if (publish) {
+                review.publish(buttons, onNext);
+            }
+            else {
+                review.save(buttons, onNext);
+            }
         });
 
         $.funcQueue("reviewForm").add(function() {
@@ -977,22 +972,6 @@ $.reviewForm = function() {
         });
 
         $.funcQueue("reviewForm").start();
-    }
-
-    /*
-     * Invokes a review action.
-     *
-     * @param {string}   action   The action.
-     * @param {function} success  The optional success callback.
-     * @param {object}   data     The optional data.
-     */
-    function reviewAction(action, success, data) {
-        reviewRequestApiCall({
-            path: getReviewDraftAPIPath() + "/" + action + "/",
-            buttons: $("input", dlg),
-            data: data,
-            success: success
-        });
     }
 };
 
@@ -1538,9 +1517,11 @@ $(document).ready(function() {
         return false;
     });
 
+    var pendingReview = gReviewRequest.createReview();
+
     /* Edit Review buttons. */
     $("#review-link, #review-banner-edit").click(function() {
-        $.reviewForm();
+        $.reviewForm(pendingReview);
     });
 
     /* Review banner's Publish button. */

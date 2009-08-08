@@ -163,6 +163,8 @@ RB.ReviewRequest = function(id, path, buttons) {
     this.id = id;
     this.path = path;
     this.buttons = buttons;
+    this.reviews = {};
+    this.draft_review = null;
 
     return this;
 }
@@ -174,6 +176,21 @@ $.extend(RB.ReviewRequest.prototype, {
     CLOSE_SUBMITTED: 2,
 
     /* Review request API */
+    createReview: function(review_id) {
+        if (review_id == undefined) {
+            if (this.draft_review == null) {
+                this.draft_review = new RB.Review(this);
+            }
+
+            return this.draft_review;
+        }
+        else if (!this.reviews[review_id]) {
+            this.reviews[review_id] = new RB.Review(this, review_id);
+        }
+
+        return this.reviews[review_id];
+    },
+
     setDraftField: function(field, value, onSuccess, onError) {
         this._apiCall({
             path: "/draft/set/" + field + "/",
@@ -288,42 +305,108 @@ $.extend(RB.ReviewRequest.prototype, {
 });
 
 
-/*
-RB.Review = function(id, review_request) {
+RB.Review = function(review_request, id) {
     this.id = id;
     this.review_request = review_request;
+    this.draft_reply = null;
+    this.shipit = false;
+    this.body_top = "";
+    this.body_bottom = "";
 
     return this;
 }
 
 $.extend(RB.Review.prototype, {
+    createReply: function() {
+        if (this.draft_reply == null) {
+            this.draft_reply = new RB.ReviewReply(this);
+        }
+
+        return this.draft_reply;
+    },
+
+    save: function(buttons, onSuccess) {
+        this._apiCall({
+            path: "save/",
+            data: {
+                shipit: this.shipit,
+                body_top: this.body_top,
+                body_bottom: this.body_bottom,
+            },
+            buttons: buttons,
+            success: onSuccess
+        });
+    },
+
+    publish: function(buttons, onSuccess) {
+        this._apiCall({
+            path: "publish/",
+            data: {
+                shipit: this.shipit,
+                body_top: this.body_top,
+                body_bottom: this.body_bottom,
+            },
+            buttons: buttons,
+            success: onSuccess
+        });
+    },
+
+    _apiCall: function(options) {
+        var self = this;
+
+        options.path = "/reviewrequests/" + this.review_request.id +
+                       "/reviews/draft/" + options.path;
+
+        if (!options.success) {
+            options.success = function() { window.location = self.path; };
+        }
+
+        rbApiCall(options);
+    }
 });
-*/
 
 
-RB.ReviewReplyComment = function(review_request_id, review_id,
-                                 context_id, context_type) {
-    this.review_request_id = review_request_id;
-    this.review_id = review_id;
-    this.context_id = context_id;
-    this.context_type = context_type;
-    this.value = "";
+RB.ReviewReply = function(review) {
+    this.review = review;
 
     return this;
 }
 
-$.extend(RB.ReviewReplyComment.prototype, {
-    save: function(buttons, onSuccess) {
+$.extend(RB.ReviewReply.prototype, {
+    addComment: function(context_id, context_type, value,
+                         buttons, onSuccess) {
         rbApiCall({
-            path: "/reviewrequests/" + this.review_request_id +
-                  "/reviews/" + this.review_id + "/replies/draft/",
+            path: "/reviewrequests/" + this.review.review_request.id +
+                  "/reviews/" + this.review.id + "/replies/draft/",
             data: {
-                value:     this.value,
-                id:        this.context_id,
-                type:      this.context_type,
-                review_id: this.review_id
+                value:     value,
+                id:        context_id,
+                type:      context_type,
+                review_id: this.review.id
             },
             buttons: buttons,
+            success: onSuccess
+        });
+    },
+
+    publish: function(buttons, onSuccess) {
+        rbApiCall({
+            path: '/reviewrequests/' + this.review.review_request.id +
+                  '/reviews/' + this.review.id + '/replies/draft/save/',
+            buttons: buttons,
+            errorText: "Saving the reply draft has " +
+                       "failed due to a server error:",
+            success: onSuccess
+        });
+    },
+
+    discard: function(buttons, onSuccess) {
+        rbApiCall({
+            path: '/reviewrequests/' + this.review.review_request.id +
+                  '/reviews/' + this.review.id + '/replies/draft/discard/',
+            buttons: buttons,
+            errorText: "Discarding the reply draft " +
+                       "has failed due to a server error:",
             success: onSuccess
         });
     }
