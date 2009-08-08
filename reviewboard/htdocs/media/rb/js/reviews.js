@@ -139,9 +139,10 @@ function linkifyText(text) {
  * @param {string} value  The field value.
  */
 function setDraftField(field, value) {
-    gReviewRequest.setDraftField(
-        field, value,
-        function(rsp) {
+    gReviewRequest.setDraftField({
+        field: field,
+        value: value,
+        success: function(rsp) {
             var func = gEditorCompleteHandlers[field];
 
             if ($.isFunction(func)) {
@@ -158,10 +159,10 @@ function setDraftField(field, value) {
                 }
             }
         },
-        function() {
+        error: function() {
             gPublishing = false;
         }
-    );
+    });
 }
 
 
@@ -382,16 +383,22 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                 .append($('<input type="button"/>')
                     .val("Publish")
                     .click(function() {
-                        review_reply.publish(bannerButtonsEl, function() {
-                            window.location = gReviewRequestPath;
+                        review_reply.publish({
+                            buttons: bannerButtonsEl,
+                            success: function() {
+                                window.location = gReviewRequestPath;
+                            }
                         });
                     })
                 )
                 .append($('<input type="button"/>')
                     .val("Discard")
                     .click(function() {
-                        review_reply.discard(bannerButtonsEl, function() {
-                            window.location = gReviewRequestPath;
+                        review_reply.discard({
+                            buttons: bannerButtonsEl,
+                            success: function() {
+                                window.location = gReviewRequestPath;
+                            }
                         });
                     })
                 )

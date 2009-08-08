@@ -251,15 +251,15 @@ $.extend(RB.ReviewRequest.prototype, {
         return new RB.Screenshot(this);
     },
 
-    setDraftField: function(field, value, onSuccess, onError) {
+    setDraftField: function(options) {
         this._apiCall({
-            path: "/draft/set/" + field + "/",
-            buttons: this.buttons,
-            data: { value: value },
+            path: "/draft/set/" + options.field + "/",
+            buttons: options.buttons,
+            data: { value: options.value },
             errorPrefix: "Saving the draft has failed due to a " +
                          "server error:",
-            success: onSuccess, // XXX
-            error: onError // XXX
+            success: options.success, // XXX
+            error: options.error // XXX
         });
     },
 
@@ -480,25 +480,25 @@ $.extend(RB.ReviewReply.prototype, {
         });
     },
 
-    publish: function(buttons, onSuccess) {
+    publish: function(options) {
         rbApiCall({
             path: '/reviewrequests/' + this.review.review_request.id +
                   '/reviews/' + this.review.id + '/replies/draft/save/',
-            buttons: buttons,
+            buttons: options.buttons,
             errorText: "Saving the reply draft has " +
                        "failed due to a server error:",
-            success: onSuccess
+            success: options.success
         });
     },
 
-    discard: function(buttons, onSuccess) {
+    discard: function(options) {
         rbApiCall({
             path: '/reviewrequests/' + this.review.review_request.id +
                   '/reviews/' + this.review.id + '/replies/draft/discard/',
-            buttons: buttons,
+            buttons: options.buttons,
             errorText: "Discarding the reply draft " +
                        "has failed due to a server error:",
-            success: onSuccess
+            success: options.success
         });
     }
 });
@@ -597,7 +597,7 @@ $.extend(RB.Screenshot.prototype, {
             contentType: "multipart/form-data; boundary=" + boundary,
             xhr: function() {
                 return google.gears.factory.create("beta.httprequest");
-            },
+            }
         });
     },
 
