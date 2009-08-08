@@ -336,10 +336,15 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                 .bind("complete", function(e, value) {
                     self.html(linkifyText(self.text()));
 
-                    review_reply.addComment(context_id, context_type, value,
-                                            bannerButtonsEl, function() {
-                        removeCommentFormIfEmpty(self);
-                        showReplyDraftBanner(review_id);
+                    review_reply.addComment({
+                        context_id: context_id,
+                        context_type: context_type,
+                        text: value,
+                        buttons: bannerButtonsEl,
+                        success: function() {
+                            removeCommentFormIfEmpty(self);
+                            showReplyDraftBanner(review_id);
+                        }
                     });
                 })
                 .bind("cancel", function(e) {

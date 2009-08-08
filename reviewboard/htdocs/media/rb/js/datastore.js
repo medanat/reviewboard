@@ -471,19 +471,18 @@ RB.ReviewReply = function(review) {
 }
 
 $.extend(RB.ReviewReply.prototype, {
-    addComment: function(context_id, context_type, value,
-                         buttons, onSuccess) {
+    addComment: function(options) {
         rbApiCall({
             path: "/reviewrequests/" + this.review.review_request.id +
                   "/reviews/" + this.review.id + "/replies/draft/",
             data: {
-                value:     value,
-                id:        context_id,
-                type:      context_type,
+                value:     options.text,
+                id:        options.context_id,
+                type:      options.context_type,
                 review_id: this.review.id
             },
-            buttons: buttons,
-            success: onSuccess
+            buttons: options.buttons,
+            success: options.success
         });
     },
 
