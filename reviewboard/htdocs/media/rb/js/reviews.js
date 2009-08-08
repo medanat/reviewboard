@@ -42,20 +42,6 @@ var gEditorCompleteHandlers = {
 
 
 /*
- * Returns the API path to the current review request. This may be an
- * absolute path or a path relative to the /api/json/ tree.
- *
- * @param {bool} fullPath  true if this should be the full, absolute path.
- *
- * @return {string} The API path.
- */
-function getReviewRequestAPIPath(fullPath) {
-    return (fullPath ? SITE_ROOT + "api/json" : "") +
-           "/reviewrequests/" + gReviewRequestId;
-}
-
-
-/*
  * Converts an array of items to a list of hyperlinks.
  *
  * By default, this will use the item as the URL and as the hyperlink text.
@@ -923,7 +909,8 @@ $.fn.reviewFormCommentEditor = function(options) {
             options.data[options.textKey] = value;
 
             rbApiCall({
-                path: getReviewRequestAPIPath() + options.path,
+                path: "/reviewrequests/" + gReviewRequestId + "/" +
+                      options.path,
                 data: options.data,
                 success: function() { self.trigger("saved"); }
             });

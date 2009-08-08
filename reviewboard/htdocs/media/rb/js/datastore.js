@@ -39,7 +39,7 @@ $.extend(RB.DiffComment.prototype, {
         var self = this;
 
         rbApiCall({
-            url: this._getURL(),
+            path: this._getURL(),
             data: {
                 action: "set",
                 num_lines: this.getNumLines(),
@@ -60,7 +60,7 @@ $.extend(RB.DiffComment.prototype, {
 
         if (this.saved) {
             rbApiCall({
-                url: this._getURL(),
+                path: this._getURL(),
                 data: {
                     action: "delete",
                     num_lines: this.getNumLines()
@@ -107,8 +107,7 @@ $.extend(RB.DiffComment.prototype, {
         var filediff_revision = this.filediff['revision'];
         var filediff_id = this.filediff['id'];
 
-        return getReviewRequestAPIPath(true) +
-               "/diff/" +
+        return "/reviewrequests/" + gReviewRequestId + "/diff/" +
                (interfilediff_revision == null
                 ? filediff_revision
                 : filediff_revision + "-" + interfilediff_revision) +
@@ -540,7 +539,7 @@ $.extend(RB.ScreenshotComment.prototype, {
         var self = this;
 
         rbApiCall({
-            url: this._getURL(),
+            path: this._getURL(),
             data: {
                 action: "set",
                 text: this.text
@@ -561,7 +560,7 @@ $.extend(RB.ScreenshotComment.prototype, {
         if (this.saved) {
             console.log("Calling delete");
             rbApiCall({
-                url: this._getURL(),
+                path: this._getURL(),
                 data: {
                     action: "delete"
                 },
@@ -596,8 +595,8 @@ $.extend(RB.ScreenshotComment.prototype, {
      * @return {string} The URL used for API calls for this comment block.
      */
     _getURL: function() {
-        return getReviewRequestAPIPath(true) +
-               "/s" + gScreenshotId + "/comments/" +
+        return "/reviewrequests/" + gReviewRequestId + "/s/" +
+               gScreenshotId + "/comments/" +
                Math.round(this.width) + "x" + Math.round(this.height) +
                "+" + Math.round(this.x) + "+" + Math.round(this.y) + "/";
     }
