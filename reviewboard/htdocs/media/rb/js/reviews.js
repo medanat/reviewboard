@@ -1384,51 +1384,18 @@ function initScreenshotDnD() {
             .css("opacity", 0)
             .fadeTo(1000, 1);
 
-        var boundary = "-----multipartformboundary" + new Date().getTime();
-
-        var blobBuilder = google.gears.factory.create("beta.blobbuilder");
-        blobBuilder.append("--" + boundary + "\r\n");
-        blobBuilder.append('Content-Disposition: form-data; name="path"; ' +
-                           'filename="' + file.name + '"\r\n');
-        blobBuilder.append('Content-Type: application/octet-stream\r\n');
-        blobBuilder.append('\r\n');
-        blobBuilder.append(file.blob);
-        blobBuilder.append('\r\n');
-        blobBuilder.append("--" + boundary + "--\r\n");
-        blobBuilder.append('\r\n');
-
-        var blob = blobBuilder.getAsBlob();
-
-        /*
-         * This is needed to prevent an error in jQuery.ajax, when it tries
-         * to match the data to e regex.
-         */
-        blob.match = function(regex) {
-            return false;
-        }
-
-        reviewRequestApiCall({
-            path: "/screenshot/new/",
-            buttons: gDraftBannerButtons,
-            data: blob,
-            processData: false,
-            contentType: "multipart/form-data; boundary=" + boundary,
-            xhr: function() {
-                return google.gears.factory.create("beta.httprequest");
+        var screenshot = gReviewRequest.createScreenshot();
+        screenshot.setData(file.name, file.blob);
+        screenshot.save(gDraftBannerButtons,
+            function(screenshot) {
+                thumb.replaceWith($.screenshotThumbnail(screenshot));
+                gDraftBanner.show();
             },
-            errorPrefix: "Uploading the screenshot has failed " +
-                         "due to a server error:",
-            success: function(rsp) {
-                if (rsp.stat == "ok") {
-                    thumb.replaceWith($.screenshotThumbnail(rsp.screenshot));
-                    gDraftBanner.show();
-                } else {
-                    showError("Uploading the screenshot has failed: " +
-                              rsp.err.msg);
-                    thumb.remove();
-                }
+            function(msg) {
+                showError("Uploading the screenshot has failed: " + msg);
+                thumb.remove();
             }
-        });
+        );
     }
 }
 

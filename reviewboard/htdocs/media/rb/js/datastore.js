@@ -191,6 +191,10 @@ $.extend(RB.ReviewRequest.prototype, {
         return this.reviews[review_id];
     },
 
+    createScreenshot: function() {
+        return new RB.Screenshot(this);
+    },
+
     setDraftField: function(field, value, onSuccess, onError) {
         this._apiCall({
             path: "/draft/set/" + field + "/",
@@ -408,6 +412,83 @@ $.extend(RB.ReviewReply.prototype, {
             errorText: "Discarding the reply draft " +
                        "has failed due to a server error:",
             success: onSuccess
+        });
+    }
+});
+
+
+RB.Screenshot = function(review_request, id) {
+    this.review_request = review_request;
+    this.id = id;
+
+    return this;
+}
+
+$.extend(RB.Screenshot.prototype, {
+    setData: function(filename, blob) {
+        this.filename = filename;
+        this.blob = blob;
+    },
+
+    save: function(buttons, onSuccess, onError) {
+        if (this.id != undefined) {
+            /* TODO: Support updating screenshots eventually. */
+            onError("The screenshot " + this.id + " was already created. " +
+                    "This is a script error. Please report it.");
+            return;
+        }
+
+        var blobBuilder;
+
+        try {
+            blobBuilder = google.gears.factory.create("beta.blobbuilder");
+        }
+        catch (e) {
+            onError("RB.Screenshot.save requires Google Gears, which was " +
+                    "not found. This is a script error. Please report it.");
+            return;
+        }
+
+        var boundary = "-----multipartformboundary" + new Date().getTime();
+        blobBuilder.append("--" + boundary + "\r\n");
+        blobBuilder.append('Content-Disposition: form-data; name="path"; ' +
+                           'filename="' + this.filename + '"\r\n');
+        blobBuilder.append('Content-Type: application/octet-stream\r\n');
+        blobBuilder.append('\r\n');
+        blobBuilder.append(this.blob);
+        blobBuilder.append('\r\n');
+        blobBuilder.append("--" + boundary + "--\r\n");
+        blobBuilder.append('\r\n');
+
+        var blob = blobBuilder.getAsBlob();
+
+        /*
+         * This is needed to prevent an error in jQuery.ajax, when it tries
+         * to match the data to e regex.
+         */
+        blob.match = function(regex) {
+            return false;
+        }
+
+        rbApiCall({
+            path: '/reviewrequests/' + this.review_request.id +
+                  '/screenshot/new/',
+            buttons: buttons,
+            data: blob,
+            processData: false,
+            contentType: "multipart/form-data; boundary=" + boundary,
+            xhr: function() {
+                return google.gears.factory.create("beta.httprequest");
+            },
+            errorPrefix: "Uploading the screenshot has failed " +
+                         "due to a server error:",
+            success: function(rsp) {
+                if (rsp.stat == "ok") {
+                    onSuccess(screenshot);
+                } else {
+                    onError(rsp.err.msg);
+                }
+            }
         });
     }
 });
