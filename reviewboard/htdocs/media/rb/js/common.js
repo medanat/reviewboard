@@ -67,89 +67,6 @@ function showServerError(specific, data) {
 }
 
 
-/*
- * Convenience wrapper for Review Board API functions. This will handle
- * any button disabling/enabling, write to the correct path prefix, form
- * uploading, and displaying server errors.
- *
- * options has the following fields:
- *
- *    buttons  - An optional list of buttons to disable/enable.
- *    form     - A form to upload, if any.
- *    type     - The request type (defaults to "POST").
- *    path     - The relative path to the Review Board API tree.
- *    data     - Data to send with the request.
- *    success  - An optional success callback. The default one will reload
- *               the page.
- *    error    - An optional error callback, called after the error banner
- *               is displayed.
- *    complete - An optional complete callback, called after the success or
- *               error callbacks.
- *
- * @param {object} options  The options, listed above.
- */
-function rbApiCall(options) {
-    function doCall() {
-        if (options.buttons) {
-            options.buttons.attr("disabled", true);
-        }
-
-        if (!options.noActivityIndicator) {
-            $("#activity-indicator")
-                .text((options.type || options.type == "GET")
-                      ? "Loading..." : "Saving...")
-                .show();
-        }
-
-        var data = $.extend(true, {
-            url: options.url || (SITE_ROOT + "api/json" + options.path),
-            data: options.data || {dummy: ""},
-            dataType: options.dataType || "json",
-            error: function(xhr, textStatus, errorThrown) {
-                showServerError(options.errorPrefix + " " + xhr.status + " " +
-                                xhr.statusText,
-                                xhr.responseText);
-
-                if ($.isFunction(options.error)) {
-                    options.error(xhr, textStatus, errorThrown);
-                }
-            },
-            complete: function(xhr, status) {
-                if (options.buttons) {
-                    options.buttons.attr("disabled", false);
-                }
-
-                if (!options.noActivityIndicator) {
-                    $("#activity-indicator")
-                        .delay(1000)
-                        .fadeOut("fast");
-                }
-
-                if ($.isFunction(options.complete)) {
-                    options.complete(xhr, status);
-                }
-
-                $.funcQueue("rbapicall").next();
-            }
-        }, options);
-
-        if (options.form) {
-            options.form.ajaxSubmit(data);
-        } else {
-            $.ajax(data);
-        }
-    }
-
-    options.type = options.type || "POST";
-
-    if (options.type == "POST" || options.type == "PUT") {
-        $.funcQueue("rbapicall").add(doCall);
-        $.funcQueue("rbapicall").start();
-    } else {
-        doCall();
-    }
-}
-
 function getGoogleGearsAllowed() {
     if (!google.gears.factory.hasPermission) {
         var siteName = "Review Board";
@@ -174,14 +91,14 @@ function getGoogleGearsAllowed() {
  *
  * options has the following fields:
  *
- *    action       - The action. Defaults to "."
- *    confirmLabel - The label on the confirm button.
- *    fields       - The serialized field data.
- *    path         - The path to post to.
- *    success      - The success function. By default, this reloads the page.
- *    title        - The form title.
- *    upload       - true if this is an upload form.
- *    width        - The optional set width of the form.
+ *    action          - The action. Defaults to "."
+ *    confirmLabel    - The label on the confirm button.
+ *    fields          - The serialized field data.
+ *    dataStoreObject - The object to edit or create.
+ *    success         - The success function. By default, this reloads the page.
+ *    title           - The form title.
+ *    upload          - true if this is an upload form.
+ *    width           - The optional set width of the form.
  *
  * options.fields is a dictionary with the following fields:
  *
@@ -201,7 +118,7 @@ $.fn.formDlg = function(options) {
         action: ".",
         confirmLabel: "Send",
         fields: {},
-        path: "",
+        dataStoreObject: null,
         success: function() { window.location.reload(); },
         title: "",
         upload: false,
@@ -307,28 +224,28 @@ $.fn.formDlg = function(options) {
          * Sends the form data to the server.
          */
         function send() {
-            rbApiCall({
-                path: options.path,
-                form: form,
+            options.dataStoreObject.setForm(form);
+            options.dataStoreObject.save({
                 buttons: $("input:button", self.modalBox("buttons")),
-                errorPrefix: "Saving the form failed due to a server error:",
                 success: function(rsp) {
-                    checkForErrors(rsp);
+                    options.success(rsp);
+                    box.remove();
+                },
+                error: function(rsp) { // error
+                    console.log(rsp);
+                    displayErrors(rsp);
                 }
             });
         }
 
 
         /*
-         * Checks the server response for errors, displaying any on the form.
+         * Displays errors on the form.
          *
          * @param {object} rsp  The server response.
          */
-        function checkForErrors(rsp) {
-            if (rsp.stat == "ok") {
-                options.success(rsp);
-                box.remove();
-            } else if (rsp.fields) {
+        function displayErrors(rsp) {
+            if (rsp.fields) {
                 errors
                     .html(rsp.err.msg)
                     .show();
@@ -369,17 +286,24 @@ $.fn.toggleStar = function(type, objid, default_) {
         var STAR_ON_IMG = MEDIA_URL + "rb/images/star_on.png?" + MEDIA_SERIAL;
         var STAR_OFF_IMG = MEDIA_URL + "rb/images/star_off.png?" + MEDIA_SERIAL;
 
+        var obj;
         var on = default_;
-        var baseURL = "/" + type + "/" + objid;
 
         self.click(function() {
             on = !on;
 
-            rbApiCall({
-                path: baseURL + (on ? "/star/" : "/unstar/"),
-                data: {}
-            });
+            if (!obj) {
+                if (type == "reviewrequests") {
+                    obj = new RB.ReviewRequest(objid);
+                } else if (type == "groups") {
+                    obj = new RB.ReviewGroup(objid);
+                } else {
+                    self.remove();
+                    return;
+                }
+            }
 
+            obj.setStarred(on);
             self.attr("src", (on ? STAR_ON_IMG : STAR_OFF_IMG));
         });
     });
