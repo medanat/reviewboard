@@ -8,8 +8,10 @@ def connect_signals(**kwargs):
     is loaded first.
     """
     from reviewboard.notifications import email
+    from reviewboard.notifications import event_manager
 
-    email.connect_signals()
+    for module in [email, event_manager]:
+        module.connect_signals()
 
 
 initializing.connect(connect_signals)

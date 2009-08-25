@@ -28,10 +28,10 @@ from djblets.webapi.errors import WebAPIError, \
 
 from reviewboard import get_version_string, get_package_version, is_release
 from reviewboard.accounts.models import Profile
+from reviewboard.changedescs.models import ChangeDescription
 from reviewboard.diffviewer.forms import UploadDiffForm, EmptyDiffError
 from reviewboard.diffviewer.models import FileDiff, DiffSet
-from reviewboard.reviews.signals import review_request_published, \
-                                        review_published, reply_published
+from reviewboard.reviews.signals import post_publish
 from reviewboard.reviews.forms import UploadScreenshotForm
 from reviewboard.reviews.errors import PermissionError
 from reviewboard.reviews.models import ReviewRequest, Review, Group, Comment, \
@@ -125,6 +125,13 @@ class ReviewBoardAPIEncoder(WebAPIEncoder):
                 'branch': o.branch,
                 'target_groups': o.target_groups.all(),
                 'target_people': o.target_people.all(),
+            }
+        elif isinstance(o, ChangeDescription):
+            return {
+                'timestamp': o.timestamp,
+                'public': o.public,
+                'text': o.text,
+                'fields_changed': o.fields_changed
             }
         elif isinstance(o, Review):
             return {
@@ -798,9 +805,8 @@ def review_request_draft_publish(request, review_request_id):
     changes = draft.publish()
     draft.delete()
 
-    review_request_published.send(sender=None, user=request.user,
-                                  review_request=review_request,
-                                  changedesc=changes)
+    post_publish.send(sender=type(review_request), instance=review_request,
+                      user=request.user, changedesc=changes)
 
     return WebAPIResponse(request)
 
@@ -997,7 +1003,8 @@ def review_draft_save(request, review_request_id, publish=False):
         review.save()
 
     if publish:
-        review_published.send(sender=None, user=request.user, review=review)
+        post_publish.send(sender=type(review), instance=review,
+                          user=request.user)
 
     return WebAPIResponse(request)
 
@@ -1163,7 +1170,8 @@ def review_reply_draft_save(request, review_request_id, review_id):
     if reply:
         reply.publish()
 
-        reply_published.send(sender=None, user=request.user, reply=reply)
+        post_publish.send(sender=type(reply), instance=reply,
+                          user=request.user)
 
         return WebAPIResponse(request)
     else:

@@ -17,7 +17,7 @@ from djblets.util.templatetags.djblets_images import crop_image, thumbnail
 
 from reviewboard.changedescs.models import ChangeDescription
 from reviewboard.diffviewer.models import DiffSet, DiffSetHistory, FileDiff
-from reviewboard.reviews.signals import review_request_published
+from reviewboard.reviews.signals import post_publish
 from reviewboard.reviews.errors import PermissionError
 from reviewboard.reviews.managers import ReviewRequestManager, ReviewManager
 from reviewboard.scmtools.errors import InvalidChangeNumberError
@@ -463,8 +463,7 @@ class ReviewRequest(models.Model):
         self.public = True
         self.save()
 
-        review_request_published.send(sender=self, user=user,
-                                      review_request=self,
+        post_publish.send(sender=type(self), instance=self, user=user,
                                       changedesc=changes)
 
     def increment_ship_it(self):

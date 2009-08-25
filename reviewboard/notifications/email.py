@@ -6,49 +6,32 @@ from django.core.mail import EmailMultiAlternatives
 from django.template.loader import render_to_string
 from djblets.siteconfig.models import SiteConfiguration
 
-from reviewboard.reviews.signals import review_request_published, \
-                                        review_published, reply_published
-from reviewboard.reviews.views import build_diff_comment_fragments
+from reviewboard.reviews.models import ReviewRequest, Review
+from reviewboard.reviews.signals import post_publish
 
 
-def review_request_published_cb(sender, user, review_request, changedesc,
-                                **kwargs):
+def post_publish_cb(sender, instance, user, **kwargs):
     """
-    Listens to the ``review_request_published`` signal and sends an
+    Listens to the ``post_publish`` signal and sends an
     email if this type of notification is enabled (through
     ``mail_send_review_mail`` site configuration).
     """
     siteconfig = SiteConfiguration.objects.get_current()
-    if siteconfig.get("mail_send_review_mail"):
-        mail_review_request(user, review_request, changedesc)
 
+    if not siteconfig.get("mail_send_review_mail"):
+        return
 
-def review_published_cb(sender, user, review, **kwargs):
-    """
-    Listens to the ``review_published`` signal and sends an email if
-    this type of notification is enabled (through
-    ``mail_send_review_mail`` site configuration).
-    """
-    siteconfig = SiteConfiguration.objects.get_current()
-    if siteconfig.get("mail_send_review_mail"):
-        mail_review(user, review)
-
-
-def reply_published_cb(sender, user, reply, **kwargs):
-    """
-    Listens to the ``reply_published`` signal and sends an email if
-    this type of notification is enabled (through
-    ``mail_send_review_mail`` site configuration).
-    """
-    siteconfig = SiteConfiguration.objects.get_current()
-    if siteconfig.get("mail_send_review_mail"):
-        mail_reply(user, reply)
+    if sender == ReviewRequest:
+        mail_review_request(user, instance, kwargs['changedesc'])
+    elif sender == Review:
+        if instance.is_reply():
+            mail_reply(user, instance)
+        else:
+            mail_review(user, instance)
 
 
 def connect_signals():
-    review_request_published.connect(review_request_published_cb)
-    review_published.connect(review_published_cb)
-    reply_published.connect(reply_published_cb)
+    post_publish.connect(post_publish_cb)
 
 
 def get_email_address_for_user(u):

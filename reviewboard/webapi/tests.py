@@ -2,6 +2,7 @@ import os
 
 from django.conf import settings
 from django.contrib.auth.models import User, Permission
+from django.contrib.sites.models import Site
 from django.core import mail
 from django.test import TestCase
 from django.utils import simplejson
@@ -9,6 +10,7 @@ from djblets.siteconfig.models import SiteConfiguration
 
 import reviewboard.webapi.json as webapi
 from reviewboard.diffviewer.models import DiffSet
+from reviewboard.notifications.models import Webhook
 from reviewboard.notifications.tests import EmailTestHelper
 from reviewboard.reviews.models import Group, ReviewRequest, \
                                        ReviewRequestDraft, Review, \
@@ -25,6 +27,11 @@ class WebAPITests(TestCase, EmailTestHelper):
         siteconfig.set("mail_send_review_mail", True)
         siteconfig.save()
         mail.outbox = []
+
+        # TODO create djng micro-app to receive the POSTs
+        # webhook = Webhook(url="http://www.postbin.org/14iso90")
+        # webhook.owner = Site.objects.get_current()
+        # webhook.save()
 
         svn_repo_path = os.path.join(os.path.dirname(__file__),
                                      '../scmtools/testdata/svn_repo')
