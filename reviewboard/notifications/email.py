@@ -8,6 +8,7 @@ from djblets.siteconfig.models import SiteConfiguration
 
 from reviewboard.reviews.models import ReviewRequest, Review
 from reviewboard.reviews.signals import post_publish
+from reviewboard.reviews.views import build_diff_comment_fragments
 
 
 def post_publish_cb(sender, instance, user, **kwargs):
