@@ -755,26 +755,50 @@ $.extend(RB.ScreenshotComment.prototype, {
  * @param {object} options  The options, listed above.
  */
 function rbApiCall(options) {
+    var url = options.url || (SITE_ROOT + "api/json" + options.path);
+
     function doCall() {
         if (options.buttons) {
             options.buttons.attr("disabled", true);
         }
 
+        var activityIndicator = $("#activity-indicator");
+
         if (!options.noActivityIndicator) {
-            $("#activity-indicator")
+            activityIndicator
+                .removeClass("error")
                 .text((options.type || options.type == "GET")
                       ? "Loading..." : "Saving...")
                 .show();
         }
 
         var data = $.extend(true, {
-            url: options.url || (SITE_ROOT + "api/json" + options.path),
+            url: url,
             data: options.data || {dummy: ""},
             dataType: options.dataType || "json",
             error: function(xhr, textStatus, errorThrown) {
-                showServerError(options.errorPrefix + " " + xhr.status + " " +
-                                xhr.statusText,
-                                xhr.responseText);
+                var responseText = xhr.responseText;
+                activityIndicator
+                    .addClass("error")
+                    .text("A server error occurred.")
+                    .append(
+                        $("<a/>")
+                            .text("Show Details")
+                            .attr("href", "#")
+                            .click(function() {
+                                showErrorPage(xhr, responseText);
+                            })
+                    )
+                    .append(
+                        $("<a/>")
+                            .text("Dismiss")
+                            .attr("href", "#")
+                            .click(function() {
+                                activityIndicator.fadeOut("fast");
+                                return false;
+                            })
+                    );
+
 
                 if ($.isFunction(options.error)) {
                     options.error(xhr, textStatus, errorThrown);
@@ -787,8 +811,9 @@ function rbApiCall(options) {
                 options.buttons.attr("disabled", false);
             }
 
-            if (!options.noActivityIndicator) {
-                $("#activity-indicator")
+            if (!options.noActivityIndicator &&
+                !activityIndicator.hasClass("error")) {
+                activityIndicator
                     .delay(1000)
                     .fadeOut("fast");
             }
@@ -805,6 +830,46 @@ function rbApiCall(options) {
         } else {
             $.ajax(data);
         }
+    }
+
+    function showErrorPage(xhr, data) {
+        var iframe = $('<iframe/>')
+            .width("100%");
+
+        var errorBox = $('<div class="server-error-box"/>')
+            .appendTo("body")
+            .append('<p><b>Error Code:</b> ' + xhr.status + '</p>')
+            .append('<p><b>Error Text:</b> ' + xhr.statusText + '</p>')
+            .append('<p><b>Request URL:</b> ' + url + '</p>')
+            .append('<p><b>Request Data:</b> ' +
+                    (options.data || "(none)") + '</p>')
+            .append('<p class="response-data"><b>Response Data:</b></p>')
+            .append(
+                '<p>There may be useful error details below. The following ' +
+                'error page may be useful to your system administrator or ' +
+                'when <a href="http://www.review-board.org/bugs/new/">' +
+                'reporting a bug</a>. To save the page, right-click the ' +
+                'error below and choose "Save Page As," if available, ' +
+                'or "View Source" and save the result as a ' +
+                '<tt>.html</tt> file.</p>')
+            .append('<p><b>Warning:</b> Be sure to remove any sensitive ' +
+                    'material that may exist in the error page before ' +
+                    'reporting a bug!</p>')
+            .append(iframe)
+            .bind("resize", function() {
+                iframe.height($(this).height() - iframe.position().top);
+            })
+            .modalBox({
+                stretchX: true,
+                stretchY: true,
+                title: "Server Error Details"
+            });
+
+        var doc = iframe[0].contentDocument ||
+                  iframe[0].contentWindow.document;
+        doc.open();
+        doc.write(data);
+        doc.close();
     }
 
     options.type = options.type || "POST";

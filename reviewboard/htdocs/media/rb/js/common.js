@@ -54,20 +54,6 @@ function showError(text, data) {
 
 
 /*
- * Shows an error banner with some default error text.
- *
- * @param {string} specific  The specific error text.
- * @param {string} data      The detailed error output from the server.
- */
-function showServerError(specific, data) {
-    showError(specific +
-              "<p>Please try again later. If this continues to" +
-              " happen, please report it to your administrator.</p>",
-              data);
-}
-
-
-/*
  * Creates a form dialog based on serialized form field data.
  * This will handle creating and managing a form dialog and posting the
  * resulting data to the server.
