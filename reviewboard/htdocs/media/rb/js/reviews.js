@@ -1293,7 +1293,6 @@ function initScreenshotDnD() {
                 gDraftBanner.show();
             },
             error: function(rsp, msg) {
-                showError("Uploading the screenshot has failed: " + msg);
                 thumb.remove();
             }
         });
