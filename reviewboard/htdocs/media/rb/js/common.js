@@ -1,72 +1,3 @@
-/*
- * Shows an error banner with the specified text and error data.
- *
- * @param {string} text  The error text.
- * @param {string} data  The detailed error output from the server.
- */
-function showError(text, data) {
-    var banner = $('<div class="banner"/>')
-        .appendTo($("#error"))
-        .append("<p><h1>Error:</h1> " + text + "</p>");
-
-    $('<input type="submit" value="Dismiss"/>')
-        .appendTo(banner)
-        .click(function() {
-            banner.remove();
-        });
-
-    $('<input type="submit" value="Details"/>')
-        .appendTo(banner)
-        .click(function() {
-            var iframe = $('<iframe/>')
-                .width("100%");
-
-            var errorBox = $('<div class="server-error-box"/>')
-                .appendTo("body")
-                .append(
-                    '<p>The following error page should be saved and ' +
-                    'attached when contacting your system administrator or ' +
-                    '<a href="http://www.review-board.org/bugs/new/">' +
-                    'reporting a bug</a>. To save the page, right-click the ' +
-                    'error below and choose "Save Page As," if available, ' +
-                    'or "View Source" and save the result as a ' +
-                    '<tt>.html</tt> file.</p>')
-                .append('<p><b>Warning:</b> Be sure to remove any sensitive ' +
-                        'material that may exist in the error page before ' +
-                        'reporting a bug!</p>')
-                .append(iframe)
-                .bind("resize", function() {
-                    iframe.height($(this).height() - iframe.position().top);
-                })
-                .modalBox({
-                    stretchX: true,
-                    stretchY: true,
-                    title: "Server Error Details"
-                });
-
-            var doc = iframe[0].contentDocument ||
-                      iframe[0].contentWindow.document;
-            doc.open();
-            doc.write(data);
-            doc.close();
-        });
-}
-
-
-/*
- * Shows an error banner with some default error text.
- *
- * @param {string} specific  The specific error text.
- * @param {string} data      The detailed error output from the server.
- */
-function showServerError(specific, data) {
-    showError(specific +
-              "<p>Please try again later. If this continues to" +
-              " happen, please report it to your administrator.</p>",
-              data);
-}
-
-
 function getGoogleGearsAllowed() {
     if (!google.gears.factory.hasPermission) {
         var siteName = "Review Board";
@@ -232,7 +163,6 @@ $.fn.formDlg = function(options) {
                     box.remove();
                 },
                 error: function(rsp) { // error
-                    console.log(rsp);
                     displayErrors(rsp);
                 }
             });

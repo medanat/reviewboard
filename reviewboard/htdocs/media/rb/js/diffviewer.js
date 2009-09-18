@@ -918,13 +918,17 @@ function addCommentFlags(table, lines) {
 /*
  * Expands a chunk of the diff.
  *
- * @param {string} fileid       The file ID.
- * @param {string} filediff_id  The FileDiff ID.
- * @param {int}    chunk_index  The chunk index number.
- * @param {string} tbody_id     The tbody ID to insert into.
+ * @param {string} fileid              The file ID.
+ * @param {string} filediff_id         The FileDiff ID.
+ * @param {string} revision            The revision of the file.
+ * @param {string} interdiff_revision  The interdiff revision of the file.
+ * @param {int}    chunk_index         The chunk index number.
+ * @param {string} tbody_id            The tbody ID to insert into.
  */
-function expandChunk(fileid, filediff_id, chunk_index, link) {
-    gDiff.getDiffFragment(fileid, filediff_id, chunk_index, function(html) {
+function expandChunk(fileid, filediff_id, revision, interdiff_revision,
+                     chunk_index, link) {
+    gDiff.getDiffFragment(fileid, filediff_id, revision, interdiff_revision,
+                          chunk_index, function(html) {
         var tbody = $(link).parents("tbody.collapsed");
         var table = tbody.parent();
 
