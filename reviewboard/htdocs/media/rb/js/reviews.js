@@ -840,6 +840,8 @@ $.reviewForm = function(review) {
      * This sets the shipit and body values, and saves all comments.
      */
     function saveReview(publish) {
+        $.funcQueue("reviewForm").clear();
+
         $(".body-top, .body-bottom").inlineEditor("save");
 
         $(".comment-editable", dlg).each(function() {
