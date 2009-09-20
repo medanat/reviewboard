@@ -22,9 +22,9 @@ def post_publish_cb(sender, instance, user, **kwargs):
     if not siteconfig.get("mail_send_review_mail"):
         return
 
-    if sender == ReviewRequest:
+    if sender is ReviewRequest:
         mail_review_request(user, instance, kwargs['changedesc'])
-    elif sender == Review:
+    elif sender is Review:
         if instance.is_reply():
             mail_reply(user, instance)
         else:

@@ -8,7 +8,7 @@ from reviewboard.reviews.signals import post_publish
 
 def get_payload(event_data):
     """
-    Returns a hash of information about the event. This a common
+    Returns a hash of information about the event. This is a common
     language all event sinks should understand in their dispatch()
     method, each using it to generate the appropriate output (email -
     to be done -, webhook, etc.).

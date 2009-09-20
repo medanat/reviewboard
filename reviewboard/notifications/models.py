@@ -7,6 +7,11 @@ from reviewboard.notifications.post_url_dispatcher import dispatch as post
 
 
 class Webhook(models.Model):
+    """
+    Stores a URL to which a payload should be POSTed. A POST is
+    dispatched through the ``dispatch()`` method, passing the payload
+    as a parameter and using the URL stored in the database.
+    """
     owner_type = models.ForeignKey(ContentType)
     owner_id = models.PositiveIntegerField()
     owner = generic.GenericForeignKey(ct_field="owner_type",
