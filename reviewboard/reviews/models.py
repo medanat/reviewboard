@@ -17,9 +17,9 @@ from djblets.util.templatetags.djblets_images import crop_image, thumbnail
 
 from reviewboard.changedescs.models import ChangeDescription
 from reviewboard.diffviewer.models import DiffSet, DiffSetHistory, FileDiff
-from reviewboard.reviews.signals import post_publish
 from reviewboard.reviews.errors import PermissionError
 from reviewboard.reviews.managers import ReviewRequestManager, ReviewManager
+from reviewboard.reviews.signals import post_publish
 from reviewboard.scmtools.errors import InvalidChangeNumberError
 from reviewboard.scmtools.models import Repository
 

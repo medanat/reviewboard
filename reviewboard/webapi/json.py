@@ -31,12 +31,12 @@ from reviewboard.accounts.models import Profile
 from reviewboard.changedescs.models import ChangeDescription
 from reviewboard.diffviewer.forms import UploadDiffForm, EmptyDiffError
 from reviewboard.diffviewer.models import FileDiff, DiffSet
-from reviewboard.reviews.signals import post_publish
-from reviewboard.reviews.forms import UploadScreenshotForm
 from reviewboard.reviews.errors import PermissionError
+from reviewboard.reviews.forms import UploadScreenshotForm
 from reviewboard.reviews.models import ReviewRequest, Review, Group, Comment, \
                                        ReviewRequestDraft, Screenshot, \
                                        ScreenshotComment
+from reviewboard.reviews.signals import post_publish
 from reviewboard.scmtools.core import FileNotFoundError
 from reviewboard.scmtools.errors import ChangeNumberInUseError, \
                                         EmptyChangeSetError, \
