@@ -138,8 +138,8 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
     }
 
     this.anchor = $("<a/>")
-        .attr("name", "file" + this.filediff['id'] + "line" +
-                      this.beginLineNum)
+        .attr("name",
+              "file" + this.filediff['id'] + "line" + this.beginLineNum)
         .addClass("comment-anchor")
         .appendTo(this.el);
 
@@ -209,7 +209,7 @@ $.extend(DiffCommentBlock.prototype, {
         this.tooltip.empty();
         var list = $("<ul/>");
 
-        if (this.draftComment != null) {
+        if (this.draftComment) {
             $("<li/>")
                 .text(this.draftComment.text.truncate())
                 .addClass("draft")
@@ -234,7 +234,7 @@ $.extend(DiffCommentBlock.prototype, {
     updateCount: function() {
         var count = this.comments.length;
 
-        if (this.draftComment != null) {
+        if (this.draftComment) {
             count++;
         }
 

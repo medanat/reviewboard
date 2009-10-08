@@ -169,8 +169,7 @@ class ReviewBoardAPIEncoder(WebAPIEncoder):
             return {
                 'id': o.id,
                 'caption': o.caption,
-                'title': u'Screenshot: %s' % (o.caption or
-                                              os.path.basename(o.image.path)),
+                'title': u'Screenshot: %s' % (o.caption or o.image.name),
                 'image_url': o.get_absolute_url(),
                 'thumbnail_url': o.get_thumbnail_url(),
             }
@@ -262,10 +261,10 @@ def server_info(request):
 @webapi_check_login_required
 def repository_list(request):
     """
-    Returns a list of all known repositories.
+    Returns a list of all known, visible repositories.
     """
     return WebAPIResponse(request, {
-        'repositories': Repository.objects.all(),
+        'repositories': Repository.objects.filter(visible=True),
     })
 
 
@@ -292,14 +291,23 @@ def user_list(request):
 
     If the q parameter is passed, users with a username beginning with
     the query value will be returned.
+
+    If the fullname parameter is passed along with the q parameter, then full
+    names will be searched as well.
     """
     # XXX Support "query" for backwards-compatibility until after 1.0.
     query = request.GET.get('q', request.GET.get('query', None))
 
-    if not query:
-        u = User.objects.filter(is_active=True)
-    else:
-        u = User.objects.filter(is_active=True, username__istartswith=query)
+    u = User.objects.filter(is_active=True)
+
+    if query:
+        q = Q(username__istartswith=query)
+
+        if request.GET.get('fullname', None):
+            q = q | (Q(first_name__istartswith=query) |
+                     Q(last_name__istartswith=query))
+
+        u = u.filter(q)
 
     return WebAPIResponse(request, {
         'users': u,
@@ -312,14 +320,22 @@ def group_list(request):
 
     If the q parameter is passed, groups with a name beginning with
     the query value will be returned.
+
+    If the displayname parameter is passed along with the q parameter, then
+    full names will be searched as well.
     """
     # XXX Support "query" for backwards-compatibility until after 1.0.
     query = request.GET.get('q', request.GET.get('query', None))
 
-    if not query:
-        u = Group.objects.all()
-    else:
-        u = Group.objects.filter(name__istartswith=query)
+    u = Group.objects.all()
+
+    if query:
+        q = Q(name__istartswith=query)
+
+        if request.GET.get('displayname', None):
+            q = q | Q(display_name__istartswith=query)
+
+        u = u.filter(q)
 
     return WebAPIResponse(request, {
         'groups': u,
@@ -468,18 +484,22 @@ def review_request(request, review_request_id):
 def review_request_last_update(request, review_request_id):
     """
     Returns the last update made to the specified review request.
+
+    This does not take into account changes to a draft review request, as
+    that's generally not update information that the owner of the draft is
+    interested in.
     """
     review_request = get_object_or_404(ReviewRequest, pk=review_request_id)
 
     if not review_request.is_accessible_by(request.user):
         return WebAPIResponseError(request, PERMISSION_DENIED)
 
-    timestamp, updated_object = review_request.get_last_activity(request.user)
+    timestamp, updated_object = review_request.get_last_activity()
     user = None
     summary = None
     update_type = None
 
-    if isinstance(updated_object, (ReviewRequest, ReviewRequestDraft)):
+    if isinstance(updated_object, ReviewRequest):
         user = updated_object.submitter
         summary = _("Review request updated")
         update_type = "review-request"
@@ -789,6 +809,8 @@ def review_request_draft_publish(request, review_request_id):
 
 
 def find_user(username):
+    username = username.strip()
+
     try:
         return User.objects.get(username=username)
     except User.DoesNotExist:
@@ -1063,6 +1085,7 @@ def review_reply_draft(request, review_request_id, review_id):
         except Comment.DoesNotExist:
             comment = Comment(reply_to=context_comment,
                               filediff=context_comment.filediff,
+                              interfilediff=context_comment.interfilediff,
                               first_line=context_comment.first_line,
                               num_lines=context_comment.num_lines)
             comment_is_new = True

@@ -340,8 +340,7 @@ $.extend(RB.DiffComment.prototype, {
                     self._deleteAndDestruct();
                 }
             });
-        }
-        else {
+        } else {
             this._deleteAndDestruct();
         }
     },
@@ -378,12 +377,12 @@ $.extend(RB.DiffComment.prototype, {
 
         return "/reviewrequests/" + gReviewRequestId + "/diff/" +
                (interfilediff_revision == null
-                ? filediff_revision
-                : filediff_revision + "-" + interfilediff_revision) +
+                    ? filediff_revision
+                    : filediff_revision + "-" + interfilediff_revision) +
                "/file/" +
                (interfilediff_id == null
-                ? filediff_id
-                : filediff_id + "-" + interfilediff_id) +
+                    ? filediff_id
+                    : filediff_id + "-" + interfilediff_id) +
                "/line/" + this.beginLineNum + "/comments/";
     }
 });
@@ -458,8 +457,6 @@ $.extend(RB.Diff.prototype, {
             path: '/reviewrequests/' + this.review_request.id + '/diff/new/',
             form: this.form,
             buttons: options.buttons,
-            errorPrefix: "Uploading the diff has failed " +
-                         "due to a server error:",
             success: function(rsp) {
                 if (rsp.stat == "ok") {
                     options.success(rsp);
@@ -491,12 +488,14 @@ RB.ReviewRequest = function(id, path) {
     return this;
 }
 
-$.extend(RB.ReviewRequest.prototype, {
+$.extend(RB.ReviewRequest, {
     /* Constants */
     CHECK_UPDATES_MSECS: 5 * 60 * 1000, // Every 5 minutes
     CLOSE_DISCARDED: 1,
-    CLOSE_SUBMITTED: 2,
+    CLOSE_SUBMITTED: 2
+});
 
+$.extend(RB.ReviewRequest.prototype, {
     /* Review request API */
     createDiff: function(revision, interdiff_revision) {
         return new RB.Diff(this, revision, interdiff_revision);
@@ -509,8 +508,7 @@ $.extend(RB.ReviewRequest.prototype, {
             }
 
             return this.draft_review;
-        }
-        else if (!this.reviews[review_id]) {
+        } else if (!this.reviews[review_id]) {
             this.reviews[review_id] = new RB.Review(this, review_id);
         }
 
@@ -526,10 +524,7 @@ $.extend(RB.ReviewRequest.prototype, {
             path: "/draft/set/" + options.field + "/",
             buttons: options.buttons,
             data: { value: options.value },
-            errorPrefix: "Saving the draft has failed due to a " +
-                         "server error:",
-            success: options.success, // XXX
-            error: options.error // XXX
+            success: options.success // XXX
         });
     },
 
@@ -545,9 +540,7 @@ $.extend(RB.ReviewRequest.prototype, {
 
         this._apiCall({
             path: "/publish/",
-            buttons: options.buttons,
-            errorPrefix: "Publishing the draft has failed due to a " +
-                         "server error:"
+            buttons: options.buttons
         });
     },
 
@@ -556,27 +549,20 @@ $.extend(RB.ReviewRequest.prototype, {
 
         this._apiCall({
             path: "/draft/discard/",
-            buttons: options.buttons,
-            errorPrefix: "Discarding the draft has failed due to a " +
-                         "server error:"
+            buttons: options.buttons
         });
     },
 
     close: function(options) {
-        if (options.type == this.CLOSE_DISCARDED) {
+        if (options.type == RB.ReviewRequest.CLOSE_DISCARDED) {
             this._apiCall({
                 path: "/close/discarded/",
-                buttons: options.buttons,
-                errorPrefix: "Discarding the review request has failed " +
-                             "due to a server error:"
+                buttons: options.buttons
             });
-        }
-        else if (options.type == this.CLOSE_SUBMITTED) {
+        } else if (options.type == RB.ReviewRequest.CLOSE_SUBMITTED) {
             this._apiCall({
                 path: "/close/submitted/",
-                buttons: options.buttons,
-                errorPrefix: "Setting the review request as submitted " +
-                             "has failed due to a server error:"
+                buttons: options.buttons
             });
         }
     },
@@ -586,9 +572,7 @@ $.extend(RB.ReviewRequest.prototype, {
 
         this._apiCall({
             path: "/reopen/",
-            buttons: options.buttons,
-            errorPrefix: "Reopening the review request has failed " +
-                         "due to a server error:"
+            buttons: options.buttons
         });
     },
 
@@ -598,8 +582,6 @@ $.extend(RB.ReviewRequest.prototype, {
         this._apiCall({
             path: "/delete/",
             buttons: options.buttons,
-            errorPrefix: "Deleting the review request has failed " +
-                         "due to a server error:",
             success: options.success
         });
     },
@@ -611,7 +593,7 @@ $.extend(RB.ReviewRequest.prototype, {
         this.lastUpdateTimestamp = lastUpdateTimestamp;
 
         setTimeout(function() { self._checkForUpdates(); },
-                   this.CHECK_UPDATES_MSECS);
+                   RB.ReviewRequest.CHECK_UPDATES_MSECS);
     },
 
     _checkForUpdates: function() {
@@ -813,11 +795,9 @@ $.extend(RB.Screenshot.prototype, {
 
         if (this.form) {
             this._saveForm(options);
-        }
-        else if (this.file) {
+        } else if (this.file) {
             this._saveFile(options);
-        }
-        else {
+        } else {
             options.error("No data has been set for this screenshot. This " +
                           "is a script error. Please report it.");
             return;
@@ -837,8 +817,7 @@ $.extend(RB.Screenshot.prototype, {
 
         try {
             blobBuilder = google.gears.factory.create("beta.blobbuilder");
-        }
-        catch (e) {
+        } catch (e) {
             options.error("RB.Screenshot.save requires Google Gears, " +
                           "which was not found. This is a script error. " +
                           "Please report it.");
@@ -882,8 +861,6 @@ $.extend(RB.Screenshot.prototype, {
         rbApiCall($.extend(options, {
             path: '/reviewrequests/' + this.review_request.id +
                   '/screenshot/' + options.path,
-            errorPrefix: "Uploading the screenshot has failed " +
-                         "due to a server error:",
             success: function(rsp) {
                 if (rsp.stat == "ok") {
                     if ($.isFunction(onSuccess)) {
@@ -964,8 +941,7 @@ $.extend(RB.ScreenshotComment.prototype, {
                     self._deleteAndDestruct();
                 }
             });
-        }
-        else {
+        } else {
             this._deleteAndDestruct();
         }
     },
@@ -1100,13 +1076,18 @@ function rbApiCall(options) {
         var iframe = $('<iframe/>')
             .width("100%");
 
+        var requestData = "(none)";
+
+        if (options.data) {
+            requestData = $.param(options.data);
+        }
+
         var errorBox = $('<div class="server-error-box"/>')
             .appendTo("body")
             .append('<p><b>Error Code:</b> ' + xhr.status + '</p>')
             .append('<p><b>Error Text:</b> ' + xhr.statusText + '</p>')
             .append('<p><b>Request URL:</b> ' + url + '</p>')
-            .append('<p><b>Request Data:</b> ' +
-                    (options.data || "(none)") + '</p>')
+            .append('<p><b>Request Data:</b> ' + requestData + '</p>')
             .append('<p class="response-data"><b>Response Data:</b></p>')
             .append(
                 '<p>There may be useful error details below. The following ' +
@@ -1145,5 +1126,6 @@ function rbApiCall(options) {
         doCall();
     }
 }
+
 
 // vim: set et:sw=4:

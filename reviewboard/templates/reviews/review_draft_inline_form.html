@@ -34,9 +34,9 @@
         var editor = $("#screenshot-comment-{{comment.id}}")
             .reviewFormCommentEditor(
                 new RB.ScreenshotComment({{comment.screenshot.id}},
-                                        {{comment.x}}, {{comment.y}},
-                                        {{comment.w}}, {{comment.h}},
-                                        "{{comment.text}}"));
+                                         {{comment.x}}, {{comment.y}},
+                                         {{comment.w}}, {{comment.h}},
+                                         "{{comment.text}}"));
         $("#edit-screenshot-comment-{{comment.id").click(function() {
             editor.inlineEditor("startEdit");
         });

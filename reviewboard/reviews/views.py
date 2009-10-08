@@ -83,8 +83,13 @@ def new_review_request(request,
     # Repository ID : visible fields mapping.  This is so we can dynamically
     # show/hide the relevant fields with javascript.
     fields = {}
-    for repo in Repository.objects.all():
-        fields[repo.id] = repo.get_scmtool().get_fields()
+    for repo in Repository.objects.filter(visible=True):
+        try:
+            fields[repo.id] = repo.get_scmtool().get_fields()
+        except Exception, e:
+            logging.error('Error loading SCMTool for repository '
+                          '%s (ID %d): %s' % (repo.name, repo.id, e),
+                          exc_info=1)
 
     # Turn the selected index back into an int so we can compare it properly.
     if 'repository' in form.data:
@@ -148,11 +153,16 @@ def review_detail(request, review_request_id,
     draft = review_request.get_draft(request.user)
 
     # Find out if we can bail early. Generate an ETag for this.
-    last_activity_time, updated_object = \
-        review_request.get_last_activity(request.user)
+    last_activity_time, updated_object = review_request.get_last_activity()
 
-    etag = "%s:%s:%s:%s" % (request.user, last_activity_time, review_timestamp,
-                            settings.AJAX_SERIAL)
+    if draft:
+        draft_timestamp = draft.last_updated
+    else:
+        draft_timestamp = ""
+
+    etag = "%s:%s:%s:%s:%s" % (request.user, last_activity_time,
+                               draft_timestamp, review_timestamp,
+                               settings.AJAX_SERIAL)
 
     if etag_if_none_match(request, etag):
         return HttpResponseNotModified()
@@ -476,8 +486,7 @@ def diff(request, review_request_id, revision=None, interdiff_revision=None,
     if draft and draft.diffset:
         num_diffs += 1
 
-    last_activity_time, updated_object = \
-        review_request.get_last_activity(request.user)
+    last_activity_time, updated_object = review_request.get_last_activity()
 
     return view_diff(request, diffset.id, interdiffset_id, {
         'review': review,
