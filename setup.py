@@ -6,18 +6,16 @@
 # MacOS X and data files installation.
 
 import os
-import shutil
 import sys
 
 from ez_setup import use_setuptools
 use_setuptools()
 
 from setuptools import setup, find_packages
-from setuptools.command.build_py import build_py
 from distutils.command.install_data import install_data
 from distutils.command.install import INSTALL_SCHEMES
 
-from reviewboard import get_package_version, is_release
+from reviewboard import get_package_version, is_release, VERSION
 
 
 # Make sure we're actually in the directory containing setup.py.
@@ -56,18 +54,21 @@ else:
     cmdclasses = {'install_data': install_data}
 
 
+PACKAGE_NAME = 'ReviewBoard'
+
 if is_release():
-    download_url = "http://downloads.review-board.org/releases/"
+    download_url = 'http://downloads.reviewboard.org/releases/%s/%s.%s/' % \
+                   (PACKAGE_NAME, VERSION[0], VERSION[1])
 else:
-    download_url = "http://downloads.review-board.org/nightlies/"
+    download_url = 'http://downloads.reviewboard.org/nightlies/'
 
 
 # Build the reviewboard package.
-setup(name="ReviewBoard",
+setup(name=PACKAGE_NAME,
       version=get_package_version(),
       license="MIT",
       description="Review Board, a web-based code review tool",
-      url="http://www.review-board.org/",
+      url="http://www.reviewboard.org/",
       download_url=download_url,
       author="The Review Board Project",
       author_email="reviewboard@googlegroups.com",
@@ -90,15 +91,19 @@ setup(name="ReviewBoard",
       },
       cmdclass=cmdclasses,
       install_requires=[
-          'Django>=1.1',
-          'django_evolution',
-          'Djblets>=0.5.1alpha1.dev_20090718',
-          'Pygments>=0.10',
+          'Django>=1.1.1',
+          'django_evolution>=0.5',
+          'Djblets>=0.6.4',
+          'Pygments>=1.1.1',
           'flup',
-          'pytz'
+          'paramiko',
+          'python-dateutil',
+          'python-memcached',
+          'pytz',
+          'recaptcha_client',
       ],
       dependency_links = [
-          "http://downloads.review-board.org/mirror/",
+          "http://downloads.reviewboard.org/mirror/",
           download_url,
       ],
       include_package_data=True,

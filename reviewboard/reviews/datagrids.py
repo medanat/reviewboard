@@ -1,13 +1,15 @@
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.urlresolvers import reverse
+from django.db.models import Q, Count
 from django.utils.html import conditional_escape
 from django.utils.translation import ugettext_lazy as _
 from djblets.datagrid.grids import Column, DateTimeColumn, \
                                    DateTimeSinceColumn, DataGrid
 from djblets.util.templatetags.djblets_utils import ageid
 
-from reviewboard.reviews.models import Group, ReviewRequest, ReviewRequestDraft
+from reviewboard.accounts.models import Profile
+from reviewboard.reviews.models import Group, ReviewRequest
 from reviewboard.reviews.templatetags.reviewtags import render_star
 
 
@@ -21,12 +23,71 @@ class StarColumn(Column):
         self.image_url = settings.MEDIA_URL + "rb/images/star_on.png"
         self.image_width = 16
         self.image_height = 15
-        self.image_alt = "Starred"
-        self.detailed_label = "Starred"
+        self.image_alt = _("Starred")
+        self.detailed_label = _("Starred")
         self.shrink = True
+        self.all_starred = {}
 
     def render_data(self, obj):
+        obj.starred = self.all_starred.get(obj.id, False)
         return render_star(self.datagrid.request.user, obj)
+
+
+class ReviewGroupStarColumn(StarColumn):
+    """
+    A specialization of StarColumn that augments the SQL query to include
+    the starred calculation for review groups.
+    """
+    def augment_queryset(self, queryset):
+        user = self.datagrid.request.user
+
+        if user.is_anonymous():
+            return queryset
+
+        try:
+            profile = user.get_profile()
+        except Profile.DoesNotExist:
+            return queryset
+
+        print profile.starred_groups.all()
+        pks = profile.starred_groups.filter(
+            pk__in=self.datagrid.id_list).values_list('pk', flat=True)
+
+        self.all_starred = {}
+
+        for pk in pks:
+            self.all_starred[pk] = True
+
+        print self.all_starred
+
+        return queryset
+
+
+class ReviewRequestStarColumn(StarColumn):
+    """
+    A specialization of StarColumn that augments the SQL query to include
+    the starred calculation for review requests.
+    """
+    def augment_queryset(self, queryset):
+        user = self.datagrid.request.user
+
+        if user.is_anonymous():
+            return queryset
+
+        try:
+            profile = user.get_profile()
+        except Profile.DoesNotExist:
+            return queryset
+
+        pks = profile.starred_review_requests.filter(
+            pk__in=self.datagrid.id_list).values_list('pk', flat=True)
+
+        self.all_starred = {}
+
+        for pk in pks:
+            self.all_starred[pk] = True
+
+        return queryset
 
 
 class ShipItColumn(Column):
@@ -39,8 +100,8 @@ class ShipItColumn(Column):
         self.image_url = settings.MEDIA_URL + "rb/images/shipit.png"
         self.image_width = 16
         self.image_height = 16
-        self.image_alt = "Ship It!"
-        self.detailed_label = "Ship It!"
+        self.image_alt = _("Ship It!")
+        self.detailed_label = _("Ship It!")
         self.db_field = "shipit_count"
         self.sortable = True
         self.shrink = True
@@ -49,10 +110,10 @@ class ShipItColumn(Column):
         if review_request.shipit_count > 0:
             return '<span class="shipit-count">' \
                     '<img src="%srb/images/shipit_checkmark.png?%s" ' \
-                         'width="9" height="8" alt="%s" /> %s' \
+                         'width="9" height="8" alt="%s" title="%s" /> %s' \
                    '</span>' % \
                 (settings.MEDIA_URL, settings.MEDIA_SERIAL,
-                 self.image_alt, review_request.shipit_count)
+                 self.image_alt, self.image_alt, review_request.shipit_count)
 
         return ""
 
@@ -74,37 +135,61 @@ class MyCommentsColumn(Column):
         # XXX It'd be nice to be able to sort on this, but datagrids currently
         # can only sort based on stored (in the DB) values, not computed values.
 
-    def render_data(self, review_request):
+    def augment_queryset(self, queryset):
         user = self.datagrid.request.user
 
         if user.is_anonymous():
-            return ""
+            return queryset
 
-        reviews = review_request.reviews.filter(user=user)
+        query_dict = {
+            'user_id': str(user.id),
+        }
 
-        if len(reviews) == 0:
+        return queryset.extra(select={
+            'mycomments_my_reviews': """
+                SELECT COUNT(1)
+                  FROM reviews_review
+                  WHERE reviews_review.user_id = %(user_id)s
+                    AND reviews_review.review_request_id =
+                        reviews_reviewrequest.id
+            """ % query_dict,
+            'mycomments_private_reviews': """
+                SELECT COUNT(1)
+                  FROM reviews_review
+                  WHERE reviews_review.user_id = %(user_id)s
+                    AND reviews_review.review_request_id =
+                        reviews_reviewrequest.id
+                    AND NOT reviews_review.public
+            """ % query_dict,
+            'mycomments_shipit_reviews': """
+                SELECT COUNT(1)
+                  FROM reviews_review
+                  WHERE reviews_review.user_id = %(user_id)s
+                    AND reviews_review.review_request_id =
+                        reviews_reviewrequest.id
+                    AND reviews_review.ship_it
+            """ % query_dict,
+        })
+
+    def render_data(self, review_request):
+        user = self.datagrid.request.user
+
+        if user.is_anonymous() or review_request.mycomments_my_reviews == 0:
             return ""
 
         image_url = None
         image_alt = None
-        found_ship_it = False
 
         # Priority is ranked in the following order:
         #
         # 1) Non-public (draft) reviews
         # 2) Public reviews marked "Ship It"
         # 3) Public reviews not marked "Ship It"
-        for review in reviews:
-            if not review.public:
-                image_url = self.image_url
-                image_alt = _("Comments drafted")
-                break
-
-            if review.ship_it:
-                found_ship_it = True
-
-        if not image_url:
-            if found_ship_it:
+        if review_request.mycomments_private_reviews > 0:
+            image_url = self.image_url
+            image_alt = _("Comments drafted")
+        else:
+            if review_request.mycomments_shipit_reviews > 0:
                 image_url = settings.MEDIA_URL + \
                             "rb/images/comment-shipit-small.png"
                 image_alt = _("Comments published. Ship it!")
@@ -112,9 +197,10 @@ class MyCommentsColumn(Column):
                 image_url = settings.MEDIA_URL + "rb/images/comment-small.png"
                 image_alt = _("Comments published")
 
-        return '<img src="%s?%s" width="%s" height="%s" alt="%s" />' % \
+        return '<img src="%s?%s" width="%s" height="%s" alt="%s" ' \
+               'title="%s" />' % \
                 (image_url, settings.MEDIA_SERIAL, self.image_width,
-                 self.image_height, image_alt)
+                 self.image_height, image_alt, image_alt)
 
 
 class NewUpdatesColumn(Column):
@@ -132,11 +218,11 @@ class NewUpdatesColumn(Column):
         self.shrink = True
 
     def render_data(self, review_request):
-        user = self.datagrid.request.user
         if review_request.new_review_count > 0:
-            return '<img src="%s" width="%s" height="%s" alt="%s" />' % \
+            return '<img src="%s" width="%s" height="%s" alt="%s" ' \
+                   'title="%s" />' % \
                 (self.image_url, self.image_width, self.image_height,
-                 self.image_alt)
+                 self.image_alt, self.image_alt)
 
         return ""
 
@@ -150,30 +236,54 @@ class SummaryColumn(Column):
         Column.__init__(self, label=label, *args, **kwargs)
         self.sortable = True
 
+    def augment_queryset(self, queryset):
+        user = self.datagrid.request.user
+
+        if user.is_anonymous():
+            return queryset
+
+        return queryset.extra(select={
+            'draft_summary': """
+                SELECT reviews_reviewrequestdraft.summary
+                  FROM reviews_reviewrequestdraft
+                  WHERE reviews_reviewrequestdraft.review_request_id =
+                        reviews_reviewrequest.id
+            """
+        })
+
     def render_data(self, review_request):
         summary = conditional_escape(review_request.summary)
         if not summary:
-            summary = '&nbsp;<i>No Summary</i>'
+            summary = '&nbsp;<i>%s</i>' % _('No Summary')
 
-        if review_request.submitter == self.datagrid.request.user:
-            try:
-                draft = review_request.draft.get()
-                summary = conditional_escape(draft.summary)
-                return "<span class=\"draftlabel\">[Draft]</span> " + \
-                       summary
-            except ReviewRequestDraft.DoesNotExist:
-                pass
+        if review_request.submitter_id == self.datagrid.request.user.id:
+            if review_request.draft_summary is not None:
+                summary = conditional_escape(review_request.draft_summary)
+                return self.__labeled_summary(_('Draft'), summary)
 
-            if not review_request.public:
-                # XXX Do we want to say "Draft?"
-                return "<span class=\"draftlabel\">[Draft]</span> " + \
-                       summary
+            if (not review_request.public and
+                review_request.status == ReviewRequest.PENDING_REVIEW):
+                return self.__labeled_summary(_('Draft'), summary)
 
-        if review_request.status == 'S':
-            return "<span class=\"draftlabel\">[Submitted]</span> " + \
-                   summary
+        if review_request.status == ReviewRequest.SUBMITTED:
+            return self.__labeled_summary(_('Submitted'), summary)
+        elif review_request.status == ReviewRequest.DISCARDED:
+            return self.__labeled_summary(_('Discarded'), summary)
 
         return summary
+
+    def __labeled_summary(self, label, summary):
+        return u'<span class="draftlabel">[%s]</span> %s' % (label, summary)
+
+
+class SubmitterColumn(Column):
+    def __init__(self, *args, **kwargs):
+        Column.__init__(self, _("Submitter"), db_field="submitter__username",
+                        shrink=True, sortable=True, link=True,
+                        *args, **kwargs)
+
+    def augment_queryset(self, queryset):
+        return queryset.select_related('submitter')
 
 
 class PendingCountColumn(Column):
@@ -219,7 +329,19 @@ class ReviewCountColumn(Column):
         self.link_func = self.link_to_object
 
     def render_data(self, review_request):
-        return str(review_request.get_public_reviews().count())
+        return str(review_request.publicreviewcount_count)
+
+    def augment_queryset(self, queryset):
+        return queryset.extra(select={
+            'publicreviewcount_count': """
+                SELECT COUNT(*)
+                  FROM reviews_review
+                  WHERE reviews_review.public
+                    AND reviews_review.base_reply_to_id is NULL
+                    AND reviews_review.review_request_id =
+                        reviews_reviewrequest.id
+            """
+        })
 
     def link_to_object(self, review_request, value):
         return "%s#last-review" % review_request.get_absolute_url()
@@ -232,14 +354,18 @@ class ReviewRequestDataGrid(DataGrid):
     This datagrid accepts the show_submitted parameter in the URL, allowing
     submitted review requests to be filtered out or displayed.
     """
-    star         = StarColumn()
+    star         = ReviewRequestStarColumn()
     ship_it      = ShipItColumn()
     summary      = SummaryColumn(expand=True, link=True, css_class="summary")
-    submitter    = Column(_("Submitter"), db_field="submitter__username",
-                          shrink=True, sortable=True, link=True)
+    submitter    = SubmitterColumn()
 
-    repository   = Column(_("Repository"), db_field="repository__name",
+    branch       = Column(_("Branch"), db_field="branch",
                           shrink=True, sortable=True, link=False)
+    bugs_closed  = Column(_("Bugs"), db_field="bugs_closed",
+                          shrink=True, sortable=False, link=False)
+    repository   = Column(_("Repository"), db_field="repository__name",
+                          shrink=True, sortable=True, link=False,
+                          css_class='repository-column')
     time_added   = DateTimeColumn(_("Posted"),
         detailed_label=_("Posted Time"),
         format="F jS, Y, P", shrink=True,
@@ -308,7 +434,8 @@ class ReviewRequestDataGrid(DataGrid):
         return False
 
     def post_process_queryset(self, queryset):
-        return queryset.with_counts(self.request.user)
+        return super(ReviewRequestDataGrid, self).post_process_queryset(
+            queryset.with_counts(self.request.user))
 
     def link_to_object(self, obj, value):
         if value and isinstance(value, User):
@@ -338,6 +465,7 @@ class DashboardDataGrid(ReviewRequestDataGrid):
             "new_updates", "star", "summary", "submitter",
             "time_added", "last_updated_since"
         ]
+        self.counts = {}
 
         group = self.request.GET.get('group', None)
         view = self.request.GET.get('view', None)
@@ -357,39 +485,34 @@ class DashboardDataGrid(ReviewRequestDataGrid):
         user = self.request.user
 
         if view == 'outgoing':
-            self.queryset = ReviewRequest.objects.from_user(user.username,
-                                                            user,
-                                                            with_counts=True)
+            self.queryset = ReviewRequest.objects.from_user(user, user)
             self.title = _(u"All Outgoing Review Requests")
         elif view == 'mine':
-            self.queryset = ReviewRequest.objects.from_user(user.username, user,
-                                                            None,
-                                                            with_counts=True)
+            self.queryset = ReviewRequest.objects.from_user(user, user, None)
             self.title = _(u"All My Review Requests")
         elif view == 'to-me':
             self.queryset = \
-                ReviewRequest.objects.to_user_directly(user.username, user,
-                                                       with_counts=True)
+                ReviewRequest.objects.to_user_directly(user, user)
             self.title = _(u"Incoming Review Requests to Me")
         elif view == 'to-group':
             if group != "":
-                self.queryset = ReviewRequest.objects.to_group(group, user,
-                                                               with_counts=True)
+                self.queryset = ReviewRequest.objects.to_group(group, user)
                 self.title = _(u"Incoming Review Requests to %s") % group
             else:
                 self.queryset = \
-                    ReviewRequest.objects.to_user_groups(user.username, user,
-                                                         with_counts=True)
+                    ReviewRequest.objects.to_user_groups(user, user)
                 self.title = _(u"All Incoming Review Requests to My Groups")
         elif view == 'starred':
             profile = user.get_profile()
             self.queryset = \
-                profile.starred_review_requests.public(user, with_counts=True)
+                profile.starred_review_requests.public(user)
             self.title = _(u"Starred Review Requests")
         else: # "incoming" or invalid
-            self.queryset = ReviewRequest.objects.to_user(user.username, user,
-                                                          with_counts=True)
+            self.queryset = ReviewRequest.objects.to_user(user, user)
             self.title = _(u"All Incoming Review Requests")
+
+        # Pre-load all querysets for the sidebar.
+        self.counts = get_sidebar_counts(user)
 
         return False
 
@@ -425,7 +548,7 @@ class GroupDataGrid(DataGrid):
     """
     A datagrid showing a list of review groups.
     """
-    star          = StarColumn()
+    star          = ReviewGroupStarColumn()
     name          = Column(_("Group ID"), link=True, sortable=True)
     displayname   = Column(_("Group Name"), field_name="display_name",
                            link=True, expand=True)
@@ -460,7 +583,42 @@ class WatchedGroupDataGrid(GroupDataGrid):
     """
     def __init__(self, request, title=_("Watched groups"), *args, **kwargs):
         GroupDataGrid.__init__(self, request, title=title, *args, **kwargs)
-        self.queryset = request.user.get_profile().starred_groups.all()
+        user = request.user
+        profile = user.get_profile()
+        self.queryset = profile.starred_groups.all()
+
+        # Pre-load all querysets for the sidebar.
+        self.counts = get_sidebar_counts(user)
 
     def link_to_object(self, group, value):
         return ".?view=to-group&group=%s" % group.name
+
+
+def get_sidebar_counts(user):
+    """Returns counts used for the Dashboard sidebar."""
+    profile = user.get_profile()
+
+    counts = {
+        'outgoing': ReviewRequest.objects.from_user(user, user).count(),
+        'incoming': ReviewRequest.objects.to_user(user, user).count(),
+        'to-me': ReviewRequest.objects.to_user_directly(user, user).count(),
+        'starred': profile.starred_review_requests.public(user).count(),
+        'mine': ReviewRequest.objects.from_user(user, user, None).count(),
+        'groups': {}
+    }
+
+    q = Group.objects.filter(Q(users=user) | Q(starred_by=user)).distinct()
+    group_names = list(q.values_list('name', flat=True))
+
+    q = Group.objects.filter(name__in=group_names)
+    q = q.filter((Q(review_requests__public=True) |
+                  Q(review_requests__submitter=user)) &
+                  Q(review_requests__submitter__is_active=True) &
+                  Q(review_requests__status='P'))
+    q = q.annotate(Count('review_requests'))
+
+    for group in q.values('name', 'review_requests__count'):
+        counts['groups'][group['name']] = \
+            group['review_requests__count']
+
+    return counts

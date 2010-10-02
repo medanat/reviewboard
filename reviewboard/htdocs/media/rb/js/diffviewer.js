@@ -10,6 +10,10 @@ var ANCHOR_FILE = 2;
 var ANCHOR_CHUNK = 4;
 
 
+// State
+var gDiff;
+
+
 /*
  * A list of key bindings for the page.
  */
@@ -44,7 +48,7 @@ var gActions = [
 
     { // Recenter
         keys: unescape("%0D"),
-        onPress: function() { scrollToAnchor(gAnchors[gSelectedAnchor]); }
+        onPress: function() { scrollToAnchor($(gAnchors[gSelectedAnchor])); }
     },
 
     { // Previous comment
@@ -104,25 +108,31 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
 
     this.filediff = gFileAnchorToId[fileid];
     this.interfilediff = gInterdiffFileAnchorToId[fileid];
+    this.beginLineNum = beginLineNum;
+    this.endLineNum = endLineNum;
     this.beginRow = beginRow;
     this.endRow = endRow;
-    this.beginLineNum = beginLineNum
-    this.endLineNum = endLineNum;
-    this.hasDraft = false;
     this.comments = [];
-    this.text = "";
-    this.canDelete = false;
-    this.type = "comment";
+    this.draftComment = null;
 
     this.el = $("<span/>")
         .addClass("commentflag")
+        .append($("<span/>").addClass("commentflag-shadow"))
         .click(function() {
             self.showCommentDlg();
             return false;
-        })
+        });
+
+    $(window).bind("resize", function(evt) {
+        self.updateSize();
+    });
+
+    var innerFlag = $("<span/>")
+        .addClass("commentflag-inner")
+        .appendTo(this.el);
 
     this.countEl = $("<span/>")
-        .appendTo(this.el);
+        .appendTo(innerFlag);
 
     if ($.browser.msie && $.browser.version == 6) {
         /*
@@ -137,7 +147,8 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
     }
 
     this.anchor = $("<a/>")
-        .attr("name", "file" + this.filediff['id'] + "line" + this.beginLineNum)
+        .attr("name",
+              "file" + this.filediff['id'] + "line" + this.beginLineNum)
         .addClass("comment-anchor")
         .appendTo(this.el);
 
@@ -150,89 +161,24 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
             var comment = comments[i];
 
             if (comment.localdraft) {
-                this.setText(comment.text);
-                this.setHasDraft(true);
-                this.canDelete = true;
+                this._createDraftComment(comment.text);
             } else {
                 this.comments.push(comment);
             }
         }
     } else {
-        this.setHasDraft(true);
+        this._createDraftComment();
     }
 
     this.updateCount();
     this.updateTooltip();
+    this.updateSize();
 
     /* Now that we've built everything, add this to the DOM. */
     this.beginRow[0].cells[0].appendChild(this.el[0]);
 }
 
 $.extend(DiffCommentBlock.prototype, {
-    /*
-     * Discards the comment block if it's empty.
-     */
-    discardIfEmpty: function() {
-        if (this.text == "" && this.comments.length == 0) {
-            var self = this;
-            this.el.fadeOut(350, function() { self.el.remove(); })
-        }
-
-        this.anchor.remove();
-    },
-
-    /*
-     * Saves the draft text in the comment block to the server.
-     */
-    save: function() {
-        var self = this;
-
-        rbApiCall({
-            url: this.getURL(),
-            data: {
-                action: "set",
-                num_lines: this.getNumLines(),
-                text: this.text
-            },
-            success: function(data) {
-                self.canDelete = true;
-                self.setHasDraft(true);
-                self.updateCount();
-                self.notify("Comment Saved");
-                showReviewBanner();
-            }
-        });
-    },
-
-    /*
-     * Deletes the draft comment on the server, discarding the comment block
-     * afterward if empty.
-     */
-    deleteComment: function() {
-        if (!this.canDelete) {
-            // TODO: Script error. Report it.
-            return;
-        }
-
-        var self = this;
-
-        rbApiCall({
-            url: this.getURL(),
-            data: {
-                action: "delete",
-                num_lines: this.getNumLines()
-            },
-            success: function(data) {
-                self.canDelete = false;
-                self.text = "";
-                self.setHasDraft(false);
-                self.updateCount();
-                self.discardIfEmpty();
-                self.notify("Comment Deleted");
-            }
-        });
-    },
-
     /*
      * Notifies the user of some update. This notification appears by the
      * comment flag.
@@ -267,35 +213,15 @@ $.extend(DiffCommentBlock.prototype, {
     },
 
     /*
-     * Sets the current text in the comment block.
-     *
-     * @param {string} text  The new text to set.
-     */
-    setText: function(text) {
-        this.text = text;
-
-        this.updateTooltip();
-    },
-
-    /*
-     * Returns the number of lines that this comment covers.
-     *
-     * @return {int} The number of lines this comment covers.
-     */
-    getNumLines: function() {
-        return this.endLineNum - this.beginLineNum + 1;
-    },
-
-    /*
      * Updates the tooltip contents.
      */
     updateTooltip: function() {
         this.tooltip.empty();
         var list = $("<ul/>");
 
-        if (this.text != "") {
+        if (this.draftComment) {
             $("<li/>")
-                .text(this.text.truncate())
+                .text(this.draftComment.text.truncate())
                 .addClass("draft")
                 .appendTo(list);
         }
@@ -318,7 +244,7 @@ $.extend(DiffCommentBlock.prototype, {
     updateCount: function() {
         var count = this.comments.length;
 
-        if (this.hasDraft) {
+        if (this.draftComment) {
             count++;
         }
 
@@ -327,21 +253,17 @@ $.extend(DiffCommentBlock.prototype, {
     },
 
     /*
-     * Sets whether or not this comment block has a draft comment.
-     *
-     * @param {bool} hasDraft  true if this has a draft comment, or false
-     *                         otherwise.
+     * Updates the size of the comment flag.
      */
-    setHasDraft: function(hasDraft) {
-        if (hasDraft != this.hasDraft) {
-            if (hasDraft) {
-                this.el.addClass("draft");
-            } else {
-                this.el.removeClass("draft");
-            }
-
-            this.hasDraft = hasDraft;
-        }
+    updateSize: function() {
+        /*
+         * On IE and Safari, the marginTop in getExtents will be wrong.
+         * Force a value.
+         */
+        var extents = this.el.getExtents("m", "t") || -4;
+        this.el.css("height",
+                    this.endRow.offset().top + this.endRow.outerHeight() -
+                    this.beginRow.offset().top - extents);
     },
 
     /*
@@ -359,8 +281,11 @@ $.extend(DiffCommentBlock.prototype, {
 
         gCommentDlg
             .one("close", function() {
+                self._createDraftComment();
+
                 gCommentDlg
-                    .setCommentBlock(self)
+                    .setDraftComment(self.draftComment)
+                    .setCommentsList(self.comments, "comment")
                     .css({
                         left: $(document).scrollLeft() +
                               ($(window).width() - gCommentDlg.width()) / 2,
@@ -372,24 +297,48 @@ $.extend(DiffCommentBlock.prototype, {
             .close();
     },
 
-    /*
-     * Returns the URL used for API calls.
-     *
-     * @return {string} The URL used for API calls for this comment block.
-     */
-    getURL: function() {
-        var interfilediff_revision = null;
-        var interfilediff_id = null;
-
-        if (this.interfilediff != null) {
-            interfilediff_revision = this.interfilediff['revision'];
-            interfilediff_id = this.interfilediff['id'];
+    _createDraftComment: function(textOnServer) {
+        if (this.draftComment != null) {
+            return;
         }
 
-        return getReviewRequestAPIPath(true) +
-               getDiffAPIPath(this.filediff['revision'], this.filediff['id'],
-                              interfilediff_revision, interfilediff_id,
-                              this.beginLineNum);
+        var self = this;
+        var el = this.el;
+        var comment = new RB.DiffComment(this.filediff, this.interfilediff,
+                                         this.beginLineNum, this.endLineNum,
+                                         textOnServer);
+
+        $.event.add(comment, "textChanged", function() {
+            self.updateTooltip();
+        });
+
+        $.event.add(comment, "deleted", function() {
+            self.notify("Comment Deleted");
+        });
+
+        $.event.add(comment, "destroyed", function() {
+            self.draftComment = null;
+
+            /* Discard the comment block if empty. */
+            if (self.comments.length == 0) {
+                el.fadeOut(350, function() { el.remove(); })
+                self.anchor.remove();
+            } else {
+                el.removeClass("draft");
+                self.updateCount();
+                self.updateTooltip();
+            }
+        });
+
+        $.event.add(comment, "saved", function() {
+            self.updateCount();
+            self.updateTooltip();
+            self.notify("Comment Saved");
+            showReviewBanner();
+        });
+
+        this.draftComment = comment;
+        el.addClass("draft");
     }
 });
 
@@ -400,12 +349,14 @@ $.extend(DiffCommentBlock.prototype, {
  * This handles all mouse actions on the diff, comment range selection, and
  * populatation of comment flags.
  *
- * @param {array} lines  The lines containing comments. See the
- *                       addCommentFlags documentation for the format.
+ * @param {array}  lines  The lines containing comments. See the
+ *                        addCommentFlags documentation for the format.
+ * @param {string} key    A unique ID identifying the file the comments
+ *                        belong too (typically based on the filediff_id).
  *
  * @return {jQuery} The diff file element.
  */
-$.fn.diffFile = function(lines) {
+$.fn.diffFile = function(lines, key) {
     return this.each(function() {
         var self = $(this);
 
@@ -418,15 +369,11 @@ $.fn.diffFile = function(lines) {
             lastSeenIndex: 0
         };
 
-        var ghostCommentFlag = $("<img/>")
+        var ghostCommentFlag = $("<span/>")
             .addClass("commentflag")
             .addClass("ghost-commentflag")
-            .attr("src", MEDIA_URL + "rb/images/comment-ghost.png?" +
-                         MEDIA_SERIAL)
-            .css({
-                'position': 'absolute',
-                'left': 2
-            })
+            .append($("<span class='commentflag-shadow'/>"))
+            .append($("<span class='commentflag-inner'/>"))
             .mousedown(function(e) { self.triggerHandler("mousedown", e); })
             .mouseup(function(e)   { self.triggerHandler("mouseup", e);   })
             .mouseover(function(e) { self.triggerHandler("mouseover", e); })
@@ -453,20 +400,11 @@ $.fn.diffFile = function(lines) {
                 }
 
                 if (isLineNumCell(node)) {
-                    var row = $(node.parentNode);
-
-                    selection.begin    = selection.end    = row;
-                    selection.beginNum = selection.endNum =
-                        parseInt(row.attr('line'));
-
-                    selection.lastSeenIndex = row[0].rowIndex;
-                    row.addClass("selected");
-
-                    self.disableSelection();
-
-                    e.stopPropagation();
-                    e.preventDefault();
+                    beginSelection($(node.parentNode));
+                    return false;
                 }
+
+                return true;
             })
             .mouseup(function(e) {
                 /*
@@ -485,20 +423,7 @@ $.fn.diffFile = function(lines) {
                 }
 
                 if (isLineNumCell(node)) {
-                    /*
-                     * Selection was finalized. Create the comment block
-                     * and show the comment dialog.
-                     */
-                    var commentBlock = new DiffCommentBlock(selection.begin,
-                                                            selection.end,
-                                                            selection.beginNum,
-                                                            selection.endNum);
-                    commentBlock.showCommentDlg();
-
-                    e.preventDefault();
-                    e.stopPropagation();
-
-                    $(node).removeClass("selected");
+                    endSelection(getActualLineNumCell($(node)).parent());
                 } else {
                     /*
                      * The user clicked somewhere else. Move the anchor
@@ -513,25 +438,9 @@ $.fn.diffFile = function(lines) {
                     }
                 }
 
-                if (selection.begin != null) {
-                    /* Reset the selection. */
-                    var rows = self[0].rows;
+                resetSelection();
 
-                    for (var i = selection.begin[0].rowIndex;
-                         i <= selection.end[0].rowIndex;
-                         i++) {
-                        $(rows[i]).removeClass("selected");
-                    }
-
-                    selection.begin    = selection.end    = null;
-                    selection.beginNum = selection.endNum = 0;
-                    selection.rows = [];
-                }
-
-                ghostCommentFlagCell = null;
-
-                /* Re-enable text selection on IE */
-                self.enableSelection();
+                return false;
             })
             .mouseover(function(e) {
                 /*
@@ -541,50 +450,11 @@ $.fn.diffFile = function(lines) {
                  *
                  * @param {event} e  The mouseover event.
                  */
-                var node = getActualRowNode($(e.target));
+                var node = getActualLineNumCell($(e.target));
                 var row = node.parent();
 
                 if (isLineNumCell(node[0])) {
-                    node.css("cursor", "pointer");
-
-                    if (selection.begin != null) {
-                        /* We have an active selection. */
-                        var linenum = parseInt(row.attr("line"));
-
-                        if (linenum < selection.beginNum) {
-                            selection.beginNum = linenum;
-                            selection.begin = row;
-                        } else if (linenum > selection.beginNum) {
-                            selection.end = row;
-                            selection.endNum = linenum;
-                        }
-
-                        var min = Math.min(selection.lastSeenIndex,
-                                           row[0].rowIndex);
-                        var max = Math.max(selection.lastSeenIndex,
-                                           row[0].rowIndex);
-
-                        for (var i = min; i <= max; i++) {
-                            $(self[0].rows[i]).addClass("selected");
-                        }
-
-                        selection.lastSeenIndex = row[0].rowIndex;
-                    } else {
-                        var lineNumCell = row[0].cells[0];
-
-                        /* See if we have a comment flag in here. */
-                        if ($(".commentflag", lineNumCell).length == 0) {
-                            ghostCommentFlag
-                                .css("top", node.offset().top - 1)
-                                .show()
-                                .parent()
-                                    .removeClass("selected");
-                            ghostCommentFlagCell = node;
-
-                        }
-
-                        row.addClass("selected");
-                    }
+                    addRowToSelection(row);
                 } else if (ghostCommentFlagCell != null &&
                            node[0] != ghostCommentFlagCell[0]) {
                     row.removeClass("selected");
@@ -598,8 +468,8 @@ $.fn.diffFile = function(lines) {
                  * @param {event} e  The mouseout event.
                  */
                 var relTarget = e.relatedTarget;
-                var node = getActualRowNode($(e.fromElement ||
-                                              e.originalTarget));
+                var node = getActualLineNumCell($(e.fromElement ||
+                                                  e.originalTarget));
 
                 if (relTarget != ghostCommentFlag[0]) {
                     ghostCommentFlag.hide();
@@ -607,23 +477,8 @@ $.fn.diffFile = function(lines) {
                 }
 
                 if (selection.begin != null) {
-                    /* We have an active selection. */
                     if (relTarget != null && isLineNumCell(relTarget)) {
-                        /*
-                         * Remove the "selection" class from any rows no
-                         * longer in this selection.
-                         */
-                        var destRowIndex = relTarget.parentNode.rowIndex;
-
-                        if (destRowIndex >= selection.begin[0].rowIndex) {
-                            for (var i = selection.lastSeenIndex;
-                                 i > destRowIndex;
-                                 i--) {
-                                $(self[0].rows[i]).removeClass("selected");
-                            }
-
-                            selection.lastSeenIndex = destRowIndex;
-                        }
+                        removeOldRowsFromSelection($(relTarget.parentNode));
                     }
                 } else if (node != null && isLineNumCell(node[0])) {
                     /*
@@ -633,9 +488,172 @@ $.fn.diffFile = function(lines) {
                      */
                     node.parent().removeClass("selected");
                 }
-            });
+            })
+            .bind("touchmove", function(e) {
+                var firstTouch = e.originalEvent.targetTouches[0];
+                var target = document.elementFromPoint(firstTouch.pageX,
+                                                       firstTouch.pageY);
+                var node = getActualLineNumCell($(target));
+                var row = node.parent();
 
-        addCommentFlags(self, lines);
+                if (selection.lastSeenIndex == row[0].rowIndex) {
+                    return;
+                }
+
+                if (isLineNumCell(node[0])) {
+                    var row = node.parent();
+                    removeOldRowsFromSelection(row);
+                    addRowToSelection(row);
+                }
+            })
+            .bind("touchcancel", function(e) {
+                resetSelection();
+            })
+            .proxyTouchEvents("touchstart touchend");
+
+        addCommentFlags(self, lines, key);
+
+        /*
+         * Begins the selection of line numbers.
+         *
+         * @param {jQuery} row  The row to begin the selection on.
+         */
+        function beginSelection(row) {
+            selection.begin    = selection.end    = row;
+            selection.beginNum = selection.endNum =
+                parseInt(row.attr('line'));
+
+            selection.lastSeenIndex = row[0].rowIndex;
+            row.addClass("selected");
+
+            self.disableSelection();
+        }
+
+        /*
+         * Finalizes the selection and pops up a comment dialog.
+         *
+         * @param {jquery} row  The row to end the selection on.
+         */
+        function endSelection(row) {
+            row.removeClass("selected");
+
+            if (selection.beginNum == selection.endNum) {
+                /* See if we have a comment flag on the selected row. */
+                var commentFlag = row.find(".commentflag");
+
+                if (commentFlag.length == 1) {
+                    commentFlag.click()
+                    return;
+                }
+            }
+
+            /*
+             * Selection was finalized. Create the comment block
+             * and show the comment dialog.
+             */
+            var commentBlock = new DiffCommentBlock(
+                selection.begin,
+                selection.end,
+                selection.beginNum,
+                selection.endNum);
+            commentBlock.showCommentDlg();
+        }
+
+        /*
+         * Adds a row to the selection. This will update the selection range
+         * and mark the rows as selected.
+         *
+         * This row is assumed to be the most recently selected row, and
+         * will mark the new beginning or end of the selection.
+         *
+         * @param {jQuery} row  The row to add to the selection.
+         */
+        function addRowToSelection(row) {
+            row.css("cursor", "pointer");
+
+            if (selection.begin != null) {
+                /* We have an active selection. */
+                var linenum = parseInt(row.attr("line"));
+
+                if (linenum < selection.beginNum) {
+                    selection.beginNum = linenum;
+                    selection.begin = row;
+                } else if (linenum > selection.beginNum) {
+                    selection.end = row;
+                    selection.endNum = linenum;
+                }
+
+                var min = Math.min(selection.lastSeenIndex,
+                                   row[0].rowIndex);
+                var max = Math.max(selection.lastSeenIndex,
+                                   row[0].rowIndex);
+
+                for (var i = min; i <= max; i++) {
+                    $(self[0].rows[i]).addClass("selected");
+                }
+
+                selection.lastSeenIndex = row[0].rowIndex;
+            } else {
+                var lineNumCell = row[0].cells[0];
+
+                /* See if we have a comment flag in here. */
+                if ($(".commentflag", lineNumCell).length == 0) {
+                    ghostCommentFlag
+                        .css("top", row.offset().top - 1)
+                        .show()
+                        .parent()
+                            .removeClass("selected");
+                    ghostCommentFlagCell = $(row[0].cells[0]);
+                }
+
+                row.addClass("selected");
+            }
+        }
+
+        /*
+         * Removes any old rows from the selection, based on the most recent
+         * row selected.
+         *
+         * @param {jQuery} row  The last row selected.
+         */
+        function removeOldRowsFromSelection(row) {
+            var destRowIndex = row[0].rowIndex;
+
+            if (destRowIndex >= selection.begin[0].rowIndex) {
+                for (var i = selection.lastSeenIndex;
+                     i > destRowIndex;
+                     i--) {
+                    $(self[0].rows[i]).removeClass("selected");
+                }
+
+                selection.lastSeenIndex = destRowIndex;
+            }
+        }
+
+        /*
+         * Resets the selection information.
+         */
+        function resetSelection() {
+            if (selection.begin != null) {
+                /* Reset the selection. */
+                var rows = self[0].rows;
+
+                for (var i = selection.begin[0].rowIndex;
+                     i <= selection.end[0].rowIndex;
+                     i++) {
+                    $(rows[i]).removeClass("selected");
+                }
+
+                selection.begin    = selection.end    = null;
+                selection.beginNum = selection.endNum = 0;
+                selection.rows = [];
+            }
+
+            ghostCommentFlagCell = null;
+
+            /* Re-enable text selection on IE */
+            self.enableSelection();
+        }
 
         /*
          * Returns whether a particular cell is a line number cell.
@@ -661,7 +679,7 @@ $.fn.diffFile = function(lines) {
          *
          * @return {jQuery} The row.
          */
-        function getActualRowNode(node) {
+        function getActualLineNumCell(node) {
             if (node.hasClass("commentflag")) {
                 if (node[0] == ghostCommentFlag[0]) {
                     node = ghostCommentFlagCell;
@@ -849,7 +867,6 @@ function gotoAnchor(name, scroll) {
  */
 function findLineNumRow(table, linenum, startRow, endRow) {
     var row = null;
-    var found = false;
     var row_offset = 1; // Get past the headers.
 
     if (table.rows.length - row_offset > linenum) {
@@ -859,6 +876,11 @@ function findLineNumRow(table, linenum, startRow, endRow) {
         if (row != null && parseInt(row.getAttribute('line')) == linenum) {
             return row;
         }
+    }
+
+    if (startRow) {
+        // startRow already includes the offset, so we need to remove it
+        startRow -= row_offset;
     }
 
     var low = startRow || 1;
@@ -874,7 +896,7 @@ function findLineNumRow(table, linenum, startRow, endRow) {
          * We collapsed the rows (unless someone mucked with the DB),
          * so the desired row is less than the row number retrieved.
          */
-        high = parseInt(row.getAttribute('line'))
+        high = Math.min(high, row_offset + linenum);
     }
 
     /* Binary search for this cell. */
@@ -882,22 +904,57 @@ function findLineNumRow(table, linenum, startRow, endRow) {
         row = table.rows[row_offset + i];
 
         if (!row) {
+            /*
+             * should not happen, unless we miscomputed high
+             */
             high--;
+            /*
+             * will not do much if low + high is odd
+             * but we'll catch up on the next iteration
+             */
+            i = Math.round((low + high) / 2);
             continue;
         }
 
         var value = parseInt(row.getAttribute('line'))
 
         if (!value) {
-            i++;
-            continue;
+            /*
+             * bad luck, let's look around.
+             * We'd expect to find a value on the first try
+             * but the following makes sure we explore all
+             * rows
+             */
+            var found = false;
+
+            for (var k = 1; k <= (high-low) / 2; k++) {
+                row = table.rows[row_offset + i + k];
+                if (row && parseInt(row.getAttribute('line'))) {
+                    i = i + k;
+                    found = true;
+                    break;
+                } else {
+                    row = table.rows[row_offset + i - k];
+                    if (row && parseInt(row.getAttribute('line'))) {
+                        i = i - k;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if (found) {
+                value = parseInt(row.getAttribute('line'));
+            } else {
+                return null;
+            }
         }
 
         /* See if we can use simple math to find the row quickly. */
-        var guessRowNum = linenum - value;
+        var guessRowNum = linenum - value + row_offset + i;
 
         if (guessRowNum >= 0 && guessRowNum < table.rows.length) {
-            var guessRow = table.rows[row_offset + i + guessRowNum];
+            var guessRow = table.rows[guessRowNum];
 
             if (guessRow
                 && parseInt(guessRow.getAttribute('line')) == linenum) {
@@ -949,8 +1006,10 @@ function findLineNumRow(table, linenum, startRow, endRow) {
  *
  * @param {HTMLElement} table  The table to add flags to.
  * @param {object}      lines  The comment lines to add.
+ * @param {string}      key    A unique ID identifying the file the comments
+ *                             belong too (typically based on the filediff_id).
  */
-function addCommentFlags(table, lines) {
+function addCommentFlags(table, lines, key) {
     var remaining = {};
 
     var prevBeginRowIndex = undefined;
@@ -986,40 +1045,33 @@ function addCommentFlags(table, lines) {
         }
     }
 
-    gHiddenComments = remaining;
+    gHiddenComments[key] = remaining;
 }
 
 
 /*
  * Expands a chunk of the diff.
  *
- * @param {string} fileid       The file ID.
- * @param {string} filediff_id  The FileDiff ID.
- * @param {int}    chunk_index  The chunk index number.
- * @param {string} tbody_id     The tbody ID to insert into.
+ * @param {string} fileid              The file ID.
+ * @param {string} filediff_id         The FileDiff ID.
+ * @param {string} revision            The revision of the file.
+ * @param {string} interdiff_revision  The interdiff revision of the file.
+ * @param {int}    chunk_index         The chunk index number.
+ * @param {string} tbody_id            The tbody ID to insert into.
  */
-function expandChunk(fileid, filediff_id, chunk_index, link) {
-    var revision = gRevision;
+function expandChunk(fileid, filediff_id, revision, interdiff_revision,
+                     chunk_index, link) {
+    gDiff.getDiffFragment(fileid, filediff_id, revision, interdiff_revision,
+                          chunk_index, function(html) {
+        var tbody = $(link).parents("tbody.diff-header");
+        var table = tbody.parent();
+        var key = "file" + filediff_id;
 
-    if (gInterdiffRevision != null) {
-      revision += "-" + gInterdiffRevision;
-    }
+        tbody.replaceWith(html);
+        addCommentFlags(table, gHiddenComments[key], key);
 
-    rbApiCall({
-        url: SITE_ROOT + 'r/' + gReviewRequestId + '/diff/' + revision +
-             '/fragment/' + filediff_id + '/chunk/' + chunk_index + '/',
-        data: {},
-        type: "GET",
-        dataType: "html",
-        complete: function(res, status) {
-            if (status == "success") {
-                var tbody = $(link).parents("tbody.collapsed");
-                var table = tbody.parent();
-
-                tbody.replaceWith(res.responseText);
-                addCommentFlags(table, gHiddenComments);
-            }
-        }
+        /* The selection rectangle may not update -- bug #1353. */
+        $(gAnchors[gSelectedAnchor]).highlightChunk();
     });
 }
 
@@ -1130,20 +1182,10 @@ function loadFileDiff(filediff_id, filediff_revision,
         /* We already have this one. This is probably a pre-loaded file. */
         setupFileDiff();
     } else {
-        var revision_str = filediff_revision;
-
-        if (interfilediff_id) {
-            revision_str += "-" + interfilediff_revision;
-        }
-
         $.funcQueue("diff_files").add(function() {
-            $.ajax({
-                type: "GET",
-                url: SITE_ROOT + "r/" + gReviewRequestId + "/diff/" +
-                     revision_str + "/fragment/" + filediff_id + "/?" +
-                     "index=" + file_index + "&" + AJAX_SERIAL,
-                complete: onFileLoaded
-            });
+            gDiff.getDiffFile(filediff_id, filediff_revision,
+                              interfilediff_id, interfilediff_revision,
+                              file_index, onFileLoaded);
         });
     }
 
@@ -1169,7 +1211,7 @@ function loadFileDiff(filediff_id, filediff_revision,
         }
 
         var diffTable = $("#file" + filediff_id);
-        diffTable.diffFile(comment_counts);
+        diffTable.diffFile(comment_counts, key);
 
         /* We must rebuild this every time. */
         updateAnchors(diffTable);
@@ -1218,7 +1260,7 @@ function toggleWhitespaceChunks()
     tables.find("tbody tr.whitespace-line").toggleClass("dimmed");
 
     /* Toggle the display of the button itself */
-    $(".review-request ul.controls li:gt(0)").toggle();
+    $(".review-request ul.controls li.ws").toggle();
 
     /* Toggle adjacent chunks, and show the whitespace message */
     tables.children("tbody.whitespace-file").toggle()
@@ -1227,7 +1269,72 @@ function toggleWhitespaceChunks()
 }
 
 
+/*
+ * Read cookie to set user preferences for showing Extra Whitespace or not.
+ *
+ * Returns true by default, false only if a cookie is set.
+ */
+function showExtraWhitespace()
+{
+    if (document.cookie && document.cookie != '') {
+        var cookies = document.cookie.split(";");
+        for (var i in cookies) {
+            var cookie = jQuery.trim(cookies[i]);
+            if (cookie == "show_ew=false") {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
+
+/*
+ * Write cookie to set user preferences for showing Extra Whitespace or not.
+ *
+ * This a session cookie.
+ */
+function setExtraWhitespace(value)
+{
+    document.cookie="show_ew="+value+"; path=/;";
+}
+
+
+/*
+ * Toggles the highlighting state of Extra Whitespace.
+ *
+ * This function turns off or on the highlighting through the ewhl class.
+ */
+function toggleExtraWhitespace(init)
+{
+
+    /* Toggle the cookie value unless this is the first call */
+    if ( init == undefined) {
+        toggleExtraWhitespace.show_ew = !toggleExtraWhitespace.show_ew;
+        setExtraWhitespace(toggleExtraWhitespace.show_ew);
+    }
+    else {
+        /* Record initial value based on cookie setting */
+        toggleExtraWhitespace.show_ew = showExtraWhitespace();
+
+        /* Page is initially loaded with highlighting off */
+        if (!toggleExtraWhitespace.show_ew) {
+            return;
+        }
+    }
+
+    /* Toggle highlighting */
+    $("table.sidebyside .ew").toggleClass("ewhl");
+
+    /* Toggle the display of the button itself */
+    $(".review-request ul.controls li.ew").toggle();
+}
+
+
 $(document).ready(function() {
+    gDiff = gReviewRequest.createDiff(gRevision, gInterdiffRevision);
+
     $(document).keypress(function(evt) {
         if (evt.altKey || evt.ctrlKey || evt.metaKey) {
             return;
@@ -1248,6 +1355,13 @@ $(document).ready(function() {
         return false;
     });
 
+    $("ul.controls li a.toggleExtraWhitespaceButton").click(function() {
+        toggleExtraWhitespace();
+        return false;
+    });
+
+    toggleExtraWhitespace('init');
+
     /*
      * Make sure any inputs on the page (such as the search box) don't
      * bubble down key presses to the document.
@@ -1264,6 +1378,16 @@ $(document).ready(function() {
     }
 
     $.funcQueue("diff_files").start();
+
+    $("table.sidebyside tr td a.moved-to," +
+      "table.sidebyside tr td a.moved-from").click(function() {
+        var destination = $(this).attr("line");
+
+        return !scrollToAnchor(
+            $("td a[target=" + destination + "]", $(this).parents("table"))
+                .parent().siblings().andSelf()
+                    .effect("highlight", {}, 2000), false);
+    });
 });
 
 // vim: set et:

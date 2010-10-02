@@ -57,6 +57,7 @@ MIDDLEWARE_CLASSES = (
 
     'djblets.log.middleware.LoggingMiddleware',
     'reviewboard.admin.middleware.CheckUpdatesRequiredMiddleware',
+    'reviewboard.admin.middleware.X509AuthMiddleware',
 )
 
 TEMPLATE_CONTEXT_PROCESSORS = (
@@ -95,6 +96,7 @@ INSTALLED_APPS = (
     'django.contrib.sessions',
     'djblets.datagrid',
     'djblets.feedview',
+    'djblets.log',
     'djblets.siteconfig',
     'djblets.util',
     'djblets.webapi',
@@ -112,8 +114,7 @@ INSTALLED_APPS = (
 )
 
 WEB_API_ENCODERS = (
-    'djblets.webapi.core.BasicAPIEncoder',
-    'reviewboard.webapi.json.ReviewBoardAPIEncoder',
+    'djblets.webapi.encoders.ResourceAPIEncoder',
 )
 
 LOGGING_NAME = "reviewboard"
@@ -133,7 +134,7 @@ TEST_RUNNER = 'reviewboard.test.runner'
 # out, instead of encountering them later on.  Most of the magic for this
 # happens in manage.py, not here.
 install_help = '''
-Please see http://www.review-board.org/docs/manual/dev/admin/
+Please see http://www.reviewboard.org/docs/manual/dev/admin/
 for help setting up Review Board.
 '''
 def dependency_error(string):
@@ -143,6 +144,8 @@ def dependency_error(string):
 
 if os.path.split(os.path.dirname(__file__))[1] != 'reviewboard':
     dependency_error('The directory containing manage.py must be named "reviewboard"')
+
+LOCAL_ROOT = None
 
 # Load local settings.  This can override anything in here, but at the very
 # least it needs to define database connectivity.
@@ -154,15 +157,16 @@ except ImportError:
 
 TEMPLATE_DEBUG = DEBUG
 
-local_dir = os.path.dirname(settings_local.__file__)
+if not LOCAL_ROOT:
+    local_dir = os.path.dirname(settings_local.__file__)
 
-if os.path.exists(os.path.join(local_dir, 'reviewboard')):
-    # reviewboard/ is in the same directory as settings_local.py.
-    # This is probably a Git checkout.
-    LOCAL_ROOT = os.path.join(local_dir, 'reviewboard')
-else:
-    # This is likely a site install. Get the parent directory.
-    LOCAL_ROOT = os.path.dirname(local_dir)
+    if os.path.exists(os.path.join(local_dir, 'reviewboard')):
+        # reviewboard/ is in the same directory as settings_local.py.
+        # This is probably a Git checkout.
+        LOCAL_ROOT = os.path.join(local_dir, 'reviewboard')
+    else:
+        # This is likely a site install. Get the parent directory.
+        LOCAL_ROOT = os.path.dirname(local_dir)
 
 HTDOCS_ROOT = os.path.join(LOCAL_ROOT, 'htdocs')
 MEDIA_ROOT = os.path.join(HTDOCS_ROOT, 'media')

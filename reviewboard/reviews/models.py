@@ -4,7 +4,7 @@ from datetime import datetime
 
 from django.contrib.auth.models import User
 from django.core.urlresolvers import reverse
-from django.db import connection, models
+from django.db import connection, models, transaction
 from django.db.models import Q, permalink
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
@@ -18,12 +18,16 @@ from djblets.util.templatetags.djblets_images import crop_image, thumbnail
 from reviewboard.changedescs.models import ChangeDescription
 from reviewboard.diffviewer.models import DiffSet, DiffSetHistory, FileDiff
 from reviewboard.reviews.errors import PermissionError
-from reviewboard.reviews.managers import ReviewRequestManager, ReviewManager
+from reviewboard.reviews.managers import DefaultReviewerManager, \
+                                         ReviewRequestManager, \
+                                         ReviewManager
 from reviewboard.reviews.signals import post_publish
-from reviewboard.scmtools.errors import InvalidChangeNumberError
+from reviewboard.scmtools.errors import EmptyChangeSetError, \
+                                        InvalidChangeNumberError
 from reviewboard.scmtools.models import Repository
 
-#the model for the summery only allows it to be 300 chars in length
+
+# The model for the review request summary only allows it to be 300 chars long
 MAX_SUMMARY_LENGTH = 300
 
 
@@ -51,6 +55,7 @@ def update_obj_with_changenum(obj, repository, changenum):
     if changeset.bugs_closed:
         obj.bugs_closed = ','.join(changeset.bugs_closed)
 
+
 def truncate(string, num):
    if len(string) > num:
       string = string[0:num]
@@ -61,13 +66,15 @@ def truncate(string, num):
 
    return string
 
+
 class Group(models.Model):
     """
     A group of reviewers identified by a name. This is usually used to
     separate teams at a company or components of a project.
 
     Each group can have an e-mail address associated with it, sending
-    all review requests and replies to that address.
+    all review requests and replies to that address. If that e-mail address is
+    blank, e-mails are sent individually to each member of that group.
     """
     name = models.SlugField(_("name"), max_length=64, blank=False, unique=True)
     display_name = models.CharField(_("display name"), max_length=64)
@@ -107,11 +114,14 @@ class DefaultReviewer(models.Model):
     file_regex = models.CharField(_("file regex"), max_length=256,
         help_text=_("File paths are matched against this regular expression "
                     "to determine if these reviewers should be added."))
+    repository = models.ManyToManyField(Repository, blank=True)
     groups = models.ManyToManyField(Group, verbose_name=_("default groups"),
                                     blank=True)
     people = models.ManyToManyField(User, verbose_name=_("default people"),
                                     related_name="default_review_paths",
                                     blank=True)
+
+    objects = DefaultReviewerManager()
 
     def __unicode__(self):
         return self.name
@@ -194,7 +204,9 @@ class ReviewRequest(models.Model):
                                             null=True, db_index=True)
     repository = models.ForeignKey(Repository,
                                    related_name="review_requests",
-                                   verbose_name=_("repository"))
+                                   verbose_name=_("repository"),
+                                   null=True,
+                                   blank=True)
     email_message_id = models.CharField(_("e-mail message ID"), max_length=255,
                                         blank=True, null=True)
     time_emailed = models.DateTimeField(_("time e-mailed"), null=True,
@@ -203,8 +215,7 @@ class ReviewRequest(models.Model):
     summary = models.CharField(_("summary"), max_length=300)
     description = models.TextField(_("description"), blank=True)
     testing_done = models.TextField(_("testing done"), blank=True)
-    bugs_closed = models.CommaSeparatedIntegerField(_("bugs"),
-                                                    max_length=300, blank=True)
+    bugs_closed = models.CharField(_("bugs"), max_length=300, blank=True)
     diffset_history = models.ForeignKey(DiffSetHistory,
                                         related_name="review_request",
                                         verbose_name=_('diff set history'),
@@ -248,6 +259,17 @@ class ReviewRequest(models.Model):
     # Set this up with the ReviewRequestManager
     objects = ReviewRequestManager()
 
+    def get_participants(self):
+        """
+        Returns a list of all people who have been involved in discussing
+        this review request.
+        """
+        # See the comment in Review.get_participants for this list
+        # comprehension.
+        return [u for review in self.reviews.all()
+                  for u in review.participants]
+
+    participants = property(get_participants)
 
     def get_bug_list(self):
         """
@@ -262,7 +284,7 @@ class ReviewRequest(models.Model):
         # case of bug trackers with numeric IDs.  If that fails, sort
         # alphabetically.
         try:
-            bugs.sort(cmp=lambda x,y: int(x) - int(y))
+            bugs.sort(cmp=lambda x,y: cmp(int(x), int(y)))
         except ValueError:
             bugs.sort()
 
@@ -313,7 +335,7 @@ class ReviewRequest(models.Model):
         # some fancy way.  Certainly the most superficial optimization that
         # could be made would be to cache the compiled regexes somewhere.
         files = diffset.files.all()
-        for default in DefaultReviewer.objects.all():
+        for default in DefaultReviewer.objects.for_repository(self.repository):
             regex = re.compile(default.file_regex)
 
             for filediff in files:
@@ -377,6 +399,52 @@ class ReviewRequest(models.Model):
         """
         return Review.objects.get_pending_review(self, user)
 
+    def get_last_activity(self):
+        """Returns the last public activity information on the review request.
+
+        This will return the last object updated, along with the timestamp
+        of that object. It can be used to judge whether something on a
+        review request has been made public more recently.
+        """
+        timestamp = self.last_updated
+        updated_object = self
+
+        # Check if the diff was updated along with this.
+        try:
+            diffset = self.diffset_history.diffsets.latest()
+
+            if diffset.timestamp >= timestamp:
+                timestamp = diffset.timestamp
+                updated_object = diffset
+        except DiffSet.DoesNotExist:
+            pass
+
+        # Check for the latest review or reply.
+        try:
+            review = self.reviews.filter(public=True).latest()
+
+            if review.timestamp >= timestamp:
+                timestamp = review.timestamp
+                updated_object = review
+        except Review.DoesNotExist:
+            pass
+
+        return timestamp, updated_object
+
+    def changeset_is_pending(self):
+        """
+        Returns True if the current changeset associated with this review
+        request is pending under SCM.
+        """
+        changeset = None
+        if self.changenum:
+            try:
+                changeset = self.repository.get_scmtool().get_changeset(self.changenum)
+            except (EmptyChangeSetError, NotImplementedError):
+                pass
+
+        return changeset and changeset.pending
+
     @permalink
     def get_absolute_url(self):
         return ('review-request-detail', None, {
@@ -384,7 +452,10 @@ class ReviewRequest(models.Model):
         })
 
     def __unicode__(self):
-        return self.summary
+        if self.summary:
+            return self.summary
+        else:
+            return unicode(_('(no summary)'))
 
     def save(self, **kwargs):
         self.bugs_closed = self.bugs_closed.strip()
@@ -455,7 +526,7 @@ class ReviewRequest(models.Model):
         draft = get_object_or_none(self.draft)
         if draft is not None:
             # This will in turn save the review request, so we'll be done.
-            changes = draft.publish(self)
+            changes = draft.publish(self, send_notification=False)
             draft.delete()
         else:
             changes = None
@@ -479,6 +550,8 @@ class ReviewRequest(models.Model):
                        "   SET shipit_count = shipit_count + 1"
                        " WHERE id = %s",
                        [self.id])
+
+        transaction.commit_unless_managed()
 
         # Update our copy.
         r = ReviewRequest.objects.get(pk=self.id)
@@ -514,7 +587,8 @@ class ReviewRequestDraft(models.Model):
     bugs_closed = models.CommaSeparatedIntegerField(_("bugs"),
                                                     max_length=300, blank=True)
     diffset = models.ForeignKey(DiffSet, verbose_name=_('diff set'),
-                                blank=True, null=True)
+                                blank=True, null=True,
+                                related_name='review_request_draft')
     changedesc = models.ForeignKey(ChangeDescription,
                                    verbose_name=_('change description'),
                                    blank=True, null=True)
@@ -554,7 +628,7 @@ class ReviewRequestDraft(models.Model):
         # case of bug trackers with numeric IDs.  If that fails, sort
         # alphabetically.
         try:
-            bugs.sort(cmp=lambda x,y: int(x) - int(y))
+            bugs.sort(cmp=lambda x,y: cmp(int(x), int(y)))
         except ValueError:
             bugs.sort()
 
@@ -622,6 +696,7 @@ class ReviewRequestDraft(models.Model):
         if not self.diffset:
             return
 
+        repository = self.review_request.repository
         people = set()
         groups = set()
 
@@ -629,7 +704,7 @@ class ReviewRequestDraft(models.Model):
         # some fancy way.  Certainly the most superficial optimization that
         # could be made would be to cache the compiled regexes somewhere.
         files = self.diffset.files.all()
-        for default in DefaultReviewer.objects.all():
+        for default in DefaultReviewer.objects.for_repository(repository):
             try:
                 regex = re.compile(default.file_regex)
             except:
@@ -653,7 +728,8 @@ class ReviewRequestDraft(models.Model):
             if group not in existing_groups:
                 self.target_groups.add(group)
 
-    def publish(self, review_request=None):
+    def publish(self, review_request=None, user=None,
+                send_notification=True):
         """
         Publishes this draft. Uses the draft's assocated ReviewRequest
         object if one isn't passed in.
@@ -689,9 +765,16 @@ class ReviewRequestDraft(models.Model):
 
         For the 'diff' field, there is only ever an 'added' field, containing
         the ID of the new diffset.
+
+        The 'send_notification' parameter is intended for internal use only,
+        and is there to prevent duplicate notifications when being called by
+        ReviewRequest.publish.
         """
         if not review_request:
             review_request = self.review_request
+
+        if not user:
+            user = review_request.submitter
 
         if not self.changedesc and review_request.public:
             self.changedesc = ChangeDescription()
@@ -792,6 +875,12 @@ class ReviewRequestDraft(models.Model):
             review_request.changedescs.add(self.changedesc)
 
         review_request.save()
+
+        if send_notification:
+            review_request_published.send(sender=review_request.__class__,
+                                          user=user,
+                                          review_request=review_request,
+                                          changedesc=self.changedesc)
 
         return self.changedesc
 
@@ -1018,6 +1107,23 @@ class Review(models.Model):
     # to fix duplicate reviews.
     objects = ReviewManager()
 
+    def get_participants(self):
+        """
+        Returns a list of all people who have been involved in discussing
+        this review.
+        """
+
+        # This list comprehension gives us every user in every reply,
+        # recursively.  It looks strange and perhaps backwards, but
+        # works. We do it this way because get_participants gives us a
+        # list back, which we can't stick in as the result for a
+        # standard list comprehension. We could opt for a simple for
+        # loop and concetenate the list, but this is more fun.
+        return [self.user] + \
+               [u for reply in self.replies.all()
+                  for u in reply.participants]
+
+    participants = property(get_participants)
 
     def __unicode__(self):
         return u"Review of '%s'" % self.review_request
@@ -1053,13 +1159,16 @@ class Review(models.Model):
 
         super(Review, self).save()
 
-    def publish(self):
+    def publish(self, user=None):
         """
         Publishes this review.
 
         This will make the review public and update the timestamps of all
         contained comments.
         """
+        if not user:
+            user = self.user
+
         self.public = True
         self.save()
 
@@ -1078,6 +1187,13 @@ class Review(models.Model):
         # Atomicly update the shipit_count
         if self.ship_it:
             self.review_request.increment_ship_it()
+
+        if self.is_reply():
+            reply_published.send(sender=self.__class__,
+                                 user=user, reply=self)
+        else:
+            review_published.send(sender=self.__class__,
+                                  user=user, review=self)
 
     def delete(self):
         """

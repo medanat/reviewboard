@@ -14,18 +14,33 @@ class FileDiff(models.Model):
     This contains the patch and information needed to produce original and
     patched versions of a single file in a repository.
     """
+    MODIFIED = 'M'
+    DELETED = 'D'
+
+    STATUSES = (
+        (MODIFIED, _('Modified')),
+        (DELETED, _('Deleted')),
+    )
+
     diffset = models.ForeignKey('DiffSet',
                                 related_name='files',
                                 verbose_name=_("diff set"))
 
-    source_file = models.CharField(_("source file"), max_length=256)
-    dest_file = models.CharField(_("destination file"), max_length=256)
-    source_revision = models.CharField(_("source file revision"), max_length=512)
-    dest_detail = models.CharField(_("destination file details"), max_length=512)
+    source_file = models.CharField(_("source file"), max_length=1024)
+    dest_file = models.CharField(_("destination file"), max_length=1024)
+    source_revision = models.CharField(_("source file revision"),
+                                       max_length=512)
+    dest_detail = models.CharField(_("destination file details"),
+                                   max_length=512)
     diff = Base64Field(_("diff"), db_column="diff_base64")
     binary = models.BooleanField(_("binary file"), default=False)
     parent_diff = Base64Field(_("parent diff"), db_column="parent_diff_base64",
                               blank=True)
+    status = models.CharField(_("status"), max_length=1, choices=STATUSES)
+
+    @property
+    def deleted(self):
+        return self.status == 'D'
 
     def __unicode__(self):
         return u"%s (%s) -> %s (%s)" % (self.source_file, self.source_revision,
@@ -39,6 +54,8 @@ class DiffSet(models.Model):
     name = models.CharField(_('name'), max_length=256)
     revision = models.IntegerField(_("revision"))
     timestamp = models.DateTimeField(_("timestamp"), default=datetime.now)
+    basedir = models.CharField(_('base directory'), max_length=256,
+                               blank=True, default='')
     history = models.ForeignKey('DiffSetHistory', null=True,
                                 related_name="diffsets",
                                 verbose_name=_("diff set history"))

@@ -5,10 +5,6 @@ import sys
 import os
 from os.path import abspath, dirname
 
-from django.core.management import execute_manager, setup_environ
-from django.template.defaultfilters import striptags
-from djblets.util.filesystem import is_exe_in_path
-
 # Add the parent directory of 'manage.py' to the python path, so manage.py can
 # be run from any directory.  From http://www.djangosnippets.org/snippets/281/
 sys.path.insert(0, dirname(dirname(abspath(__file__))))
@@ -19,17 +15,26 @@ except ImportError:
     sys.stderr.write("Error: Can't find the file 'settings.py' in the directory containing %r. It appears you've customized things.\nYou'll have to run django-admin.py, passing it your settings module.\n(If the file settings.py does indeed exist, it's causing an ImportError somehow.)\n" % __file__)
     sys.exit(1)
 
-from reviewboard.admin import checks
+from django.core.management import execute_manager, setup_environ
 from reviewboard.admin.migration import fix_django_evolution_issues
 
 
 warnings_found = 0
 def check_dependencies():
-    from settings import dependency_error
-
     # Some of our checks require access to django.conf.settings, so
     # tell Django about our settings.
+    #
+    # This must go before the imports.
     setup_environ(settings)
+
+
+    from django.template.defaultfilters import striptags
+    from djblets.util.filesystem import is_exe_in_path
+
+    from reviewboard.admin import checks
+
+    from settings import dependency_error
+
 
     # Python 2.4
     if sys.version_info[0] < 2 or \
@@ -60,6 +65,13 @@ def check_dependencies():
     except ImportError:
         dependency_error('The Python Imaging Library (PIL) is required.')
 
+
+    # ReCaptcha
+    try:
+        import recaptcha
+    except ImportError:
+        dependency_error('The recaptcha python module is required.')
+
     import subprocess
 
     # The following checks are non-fatal warnings, since these dependencies are
@@ -87,6 +99,11 @@ def check_dependencies():
         imp.find_module('mercurial')
     except ImportError:
         dependency_warning('hg not found.  Mercurial integration will not work.')
+
+    try:
+        imp.find_module('bzrlib')
+    except ImportError:
+        dependency_warning('bzrlib not found.  Bazaar integration will not work.')
 
     for check_func in (checks.get_can_enable_search,
                        checks.get_can_enable_syntax_highlighting):

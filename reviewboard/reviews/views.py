@@ -30,7 +30,6 @@ from reviewboard.accounts.decorators import check_login_required, \
                                             valid_prefs_required
 from reviewboard.accounts.models import ReviewRequestVisit
 from reviewboard.diffviewer.diffutils import get_file_chunks_in_range
-from reviewboard.diffviewer.forms import UploadDiffForm
 from reviewboard.diffviewer.models import DiffSet
 from reviewboard.diffviewer.views import view_diff, view_diff_fragment, \
                                          exception_traceback_string
@@ -39,13 +38,15 @@ from reviewboard.reviews.datagrids import DashboardDataGrid, \
                                           ReviewRequestDataGrid, \
                                           SubmitterDataGrid, \
                                           WatchedGroupDataGrid
+from reviewboard.reviews.errors import OwnershipError
 from reviewboard.reviews.forms import NewReviewRequestForm, \
+                                      UploadDiffForm, \
                                       UploadScreenshotForm
 from reviewboard.reviews.models import Comment, ReviewRequest, \
                                        ReviewRequestDraft, Review, Group, \
                                        Screenshot, ScreenshotComment
 from reviewboard.scmtools.core import PRE_CREATION
-from reviewboard.scmtools.models import Repository
+from reviewboard.scmtools.errors import SCMError
 
 
 @login_required
@@ -63,34 +64,42 @@ def new_review_request(request,
             try:
                 review_request = form.create(
                     user=request.user,
-                    diff_file=request.FILES['diff_path'],
+                    diff_file=request.FILES.get('diff_path'),
                     parent_diff_file=request.FILES.get('parent_diff_path'))
                 return HttpResponseRedirect(review_request.get_absolute_url())
-            except:
-                # XXX - OwnershipError or ChangeSetError?
-                #
-                # We're preventing an exception from being thrown here so that
-                # we can display the errors that form.create() sets in
-                # a much nicer way in the template. Otherwise, the user would
-                # see a useless backtrace.
+            except (OwnershipError, SCMError, ValueError):
                 pass
     else:
         form = NewReviewRequestForm()
 
-    # Repository ID : visible fields mapping.  This is so we can dynamically
-    # show/hide the relevant fields with javascript.
-    fields = {}
-    for repo in Repository.objects.all():
-        fields[repo.id] = repo.get_scmtool().get_fields()
-
-    # Turn the selected index back into an int so we can compare it properly.
-    if 'repository' in form.data:
-        form.data['repository'] = int(form.data['repository'])
-
     return render_to_response(template_name, RequestContext(request, {
         'form': form,
-        'fields': simplejson.dumps(fields),
+        'fields': simplejson.dumps(form.field_mapping),
     }))
+
+
+def make_review_request_context(review_request, extra_context):
+    """Returns a dictionary for template contexts used for review requests.
+
+    The dictionary will contain the common data that is used for all
+    review request-related pages (the review request detail page, the diff
+    viewer, and the screenshot pages).
+
+    For convenience, extra data can be passed to this dictionary.
+    """
+    if review_request.repository:
+        upload_diff_form = UploadDiffForm(review_request)
+        scmtool = review_request.repository.get_scmtool()
+    else:
+        upload_diff_form = None
+        scmtool = None
+
+    return dict({
+        'review_request': review_request,
+        'upload_diff_form': upload_diff_form,
+        'upload_screenshot_form': UploadScreenshotForm(),
+        'scmtool': scmtool,
+    }, **extra_context)
 
 
 fields_changed_name_map = {
@@ -106,21 +115,9 @@ fields_changed_name_map = {
     'diff': 'Diff',
 }
 
-def get_last_activity_time(review_request, draft):
-    """Utility function to generate a last activity timestamp.
-
-    This is used for ETags and update checking for review request-related
-    pages.
-    """
-    timestamps = [review_request.last_updated]
-
-    if draft:
-        timestamps.append(draft.last_updated)
-
-    return get_latest_timestamp(timestamps)
-
 
 @check_login_required
+@valid_prefs_required
 def review_detail(request, review_request_id,
                   template_name="reviews/review_detail.html"):
     """
@@ -131,6 +128,8 @@ def review_detail(request, review_request_id,
 
     reviews = review_request.get_public_reviews()
     review = review_request.get_pending_review(request.user)
+    review_timestamp = 0
+    starred = False
 
     if request.user.is_authenticated():
         # If the review request is public and pending review and if the user
@@ -141,11 +140,10 @@ def review_detail(request, review_request_id,
             visited.timestamp = datetime.now()
             visited.save()
 
+        starred = review_request in \
+                  request.user.get_profile().starred_review_requests.all()
 
-    # Unlike review above, this covers replies as well.
-    review_timestamp = 0
-
-    if request.user.is_authenticated():
+        # Unlike review above, this covers replies as well.
         try:
             last_draft_review = Review.objects.filter(
                 review_request=review_request,
@@ -155,18 +153,25 @@ def review_detail(request, review_request_id,
         except Review.DoesNotExist:
             pass
 
+
     draft = review_request.get_draft(request.user)
 
     # Find out if we can bail early. Generate an ETag for this.
-    last_activity_time = get_last_activity_time(review_request, draft)
+    last_activity_time, updated_object = review_request.get_last_activity()
 
-    etag = "%s:%s:%s:%s" % (request.user, last_activity_time, review_timestamp,
-                            settings.AJAX_SERIAL)
+    if draft:
+        draft_timestamp = draft.last_updated
+    else:
+        draft_timestamp = ""
+
+    etag = "%s:%s:%s:%s:%s:%s" % (request.user, last_activity_time,
+                                  draft_timestamp, review_timestamp,
+                                  int(starred),
+                                  settings.AJAX_SERIAL)
 
     if etag_if_none_match(request, etag):
         return HttpResponseNotModified()
 
-    repository = review_request.repository
     changedescs = review_request.changedescs.filter(public=True)
 
     entries = []
@@ -234,23 +239,20 @@ def review_detail(request, review_request_id,
 
     entries.sort(key=lambda item: item['timestamp'])
 
-    response = render_to_response(template_name, RequestContext(request, {
-        'draft': draft,
-        'review_request': review_request,
-        'review_request_details': draft or review_request,
-        'entries': entries,
-        'last_activity_time': last_activity_time,
-        'review': review,
-        'request': request,
-        'upload_diff_form': UploadDiffForm(repository),
-        'upload_screenshot_form': UploadScreenshotForm(),
-        'scmtool': repository.get_scmtool(),
-        'PRE_CREATION': PRE_CREATION,
-    }))
+    response = render_to_response(
+        template_name,
+        RequestContext(request, make_review_request_context(review_request, {
+            'draft': draft,
+            'review_request_details': draft or review_request,
+            'entries': entries,
+            'last_activity_time': last_activity_time,
+            'review': review,
+            'request': request,
+            'PRE_CREATION': PRE_CREATION,
+        })))
     set_etag(response, etag)
 
     return response
-
 
 
 @login_required
@@ -267,7 +269,6 @@ def review_draft_inline_form(request, review_request_id, template_name):
     return render_to_response(template_name, RequestContext(request, {
         'review_request': review_request,
         'review': review,
-        'scmtool': review_request.repository.get_scmtool(),
         'PRE_CREATION': PRE_CREATION,
     }))
 
@@ -439,8 +440,6 @@ def diff(request, review_request_id, revision=None, interdiff_revision=None,
     review = review_request.get_pending_review(request.user)
     draft = review_request.get_draft(request.user)
 
-    repository = review_request.repository
-
     has_draft_diff = draft and draft.diffset
     is_draft_diff = has_draft_diff and draft.diffset == diffset
     is_draft_interdiff = has_draft_diff and interdiffset and \
@@ -450,23 +449,21 @@ def diff(request, review_request_id, revision=None, interdiff_revision=None,
     if draft and draft.diffset:
         num_diffs += 1
 
-    last_activity_time = get_last_activity_time(review_request, draft)
+    last_activity_time, updated_object = review_request.get_last_activity()
 
-    return view_diff(request, diffset.id, interdiffset_id, {
-        'review': review,
-        'review_request': review_request,
-        'review_request_details': draft or review_request,
-        'draft': draft,
-        'is_draft_diff': is_draft_diff,
-        'is_draft_interdiff': is_draft_interdiff,
-        'num_diffs': num_diffs,
-        'upload_diff_form': UploadDiffForm(repository),
-        'upload_screenshot_form': UploadScreenshotForm(),
-        'scmtool': repository.get_scmtool(),
-        'last_activity_time': last_activity_time,
-        'specific_diff_requested': revision is not None or
-                                   interdiff_revision is not None,
-    }, template_name)
+    return view_diff(
+         request, diffset.id, interdiffset_id, template_name=template_name,
+         extra_context=make_review_request_context(review_request, {
+            'review': review,
+            'review_request_details': draft or review_request,
+            'draft': draft,
+            'is_draft_diff': is_draft_diff,
+            'is_draft_interdiff': is_draft_interdiff,
+            'num_diffs': num_diffs,
+            'last_activity_time': last_activity_time,
+            'specific_diff_requested': revision is not None or
+                                       interdiff_revision is not None,
+        }))
 
 
 @check_login_required
@@ -478,7 +475,8 @@ def raw_diff(request, review_request_id, revision=None):
     review_request = get_object_or_404(ReviewRequest, pk=review_request_id)
     diffset = _query_for_diff(review_request, request.user, revision)
 
-    data = ''.join([filediff.diff for filediff in diffset.files.all()])
+    tool = review_request.repository.get_scmtool()
+    data = tool.get_parser('').raw_diff(diffset)
 
     resp = HttpResponse(data, mimetype='text/x-patch')
 
@@ -500,6 +498,7 @@ def build_diff_comment_fragments(
 
     comment_entries = []
     had_error = False
+    siteconfig = SiteConfiguration.objects.get_current()
 
     for comment in comments:
         try:
@@ -509,7 +508,9 @@ def build_diff_comment_fragments(
                                                         comment.filediff,
                                                         comment.interfilediff,
                                                         comment.first_line,
-                                                        comment.num_lines))
+                                                        comment.num_lines)),
+                'domain': Site.objects.get_current().domain,
+                'domain_method': siteconfig.get("site_domain_method"),
             })
         except Exception, e:
             content = exception_traceback_string(None, e,
@@ -520,6 +521,8 @@ def build_diff_comment_fragments(
                     'index': None,
                     'filediff': comment.filediff,
                 },
+                'domain': Site.objects.get_current().domain,
+                'domain_method': siteconfig.get("site_domain_method"),
             })
 
             # It's bad that we failed, and we'll return a 500, but we'll
@@ -592,16 +595,12 @@ def diff_fragment(request, review_request_id, revision, filediff_id,
     diff.
     """
     review_request = get_object_or_404(ReviewRequest, pk=review_request_id)
-    draft = review_request.get_draft(request.user)
+    review_request.get_draft(request.user)
 
     if interdiff_revision is not None:
         interdiffset = _query_for_diff(review_request, request.user,
                                        interdiff_revision)
         interdiffset_id = interdiffset.id
-        # Only the interdiff should have an extra query for the draft.
-        # It's going to be the most recent diff (generally). We should be
-        # smarter and check.
-        query_extra = None
     else:
         interdiffset_id = None
 
@@ -780,18 +779,17 @@ def view_screenshot(request, review_request_id, screenshot_id,
     except ScreenshotComment.DoesNotExist:
         comments = []
 
-    return render_to_response(template_name, RequestContext(request, {
-        'draft': draft,
-        'review_request': review_request,
-        'review_request_details': draft or review_request,
-        'review': review,
-        'details': draft or review_request,
-        'screenshot': screenshot,
-        'request': request,
-        'comments': comments,
-        'upload_diff_form': UploadDiffForm(review_request.repository),
-        'upload_screenshot_form': UploadScreenshotForm(),
-    }))
+    return render_to_response(
+        template_name,
+        RequestContext(request, make_review_request_context(review_request, {
+            'draft': draft,
+            'review_request_details': draft or review_request,
+            'review': review,
+            'details': draft or review_request,
+            'screenshot': screenshot,
+            'request': request,
+            'comments': comments,
+        })))
 
 
 def search(request, template_name='reviews/search.html'):
@@ -810,6 +808,9 @@ def search(request, template_name='reviews/search.html'):
         return HttpResponseRedirect(reverse("root"))
 
     import lucene
+    lv = [int(x) for x in lucene.VERSION.split('.')]
+    lucene_is_2x = lv[0] == 2 and lv[1] < 9
+    lucene_is_3x = lv[0] == 3 or (lv[0] == 2 and lv[1] == 9)
 
     # We may have already initialized lucene
     try:
@@ -818,16 +819,29 @@ def search(request, template_name='reviews/search.html'):
         pass
 
     index_file = siteconfig.get("search_index_file")
-    store = lucene.FSDirectory.getDirectory(index_file, False)
+    if lucene_is_2x:
+        store = lucene.FSDirectory.getDirectory(index_file, False)
+    elif lucene_is_3x:
+        store = lucene.FSDirectory.open(lucene.File(index_file))
+    else:
+        assert False
+
     try:
         searcher = lucene.IndexSearcher(store)
     except lucene.JavaError, e:
         # FIXME: show a useful error
         raise e
 
-    parser = lucene.QueryParser('text', lucene.StandardAnalyzer())
-    result_ids = [int(lucene.Hit.cast_(hit).getDocument().get('id')) \
-                  for hit in searcher.search(parser.parse(query))]
+    if lucene_is_2x:
+        parser = lucene.QueryParser('text', lucene.StandardAnalyzer())
+        result_ids = [int(lucene.Hit.cast_(hit).getDocument().get('id')) \
+                      for hit in searcher.search(parser.parse(query))]
+    elif lucene_is_3x:
+        parser = lucene.QueryParser(lucene.Version.LUCENE_CURRENT, 'text',
+            lucene.StandardAnalyzer(lucene.Version.LUCENE_CURRENT))
+        result_ids = [searcher.doc(hit.doc).get('id') \
+                      for hit in searcher.search(parser.parse(query), 100).scoreDocs]
+
 
     searcher.close()
 

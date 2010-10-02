@@ -1,16 +1,23 @@
+from django.conf.urls.defaults import include, patterns
 from djblets.util.misc import never_cache_patterns
 
 from reviewboard.reviews.models import ReviewRequest
+from reviewboard.webapi.resources import root_resource
 
 
-urlpatterns = never_cache_patterns('djblets.webapi.auth',
+# Top-level resources
+urlpatterns = root_resource.get_url_patterns()
+
+
+# Deprecated URLs
+deprecated_urlpatterns = never_cache_patterns('djblets.webapi.auth',
     # Accounts
     (r'^accounts/login/$', 'account_login'),
     (r'^accounts/logout/$', 'account_logout'),
 )
 
 
-urlpatterns += never_cache_patterns('reviewboard.webapi.json',
+deprecated_urlpatterns += never_cache_patterns('reviewboard.webapi.json',
     # Server information
     (r'^info/$', 'server_info'),
 
@@ -44,24 +51,24 @@ urlpatterns += never_cache_patterns('reviewboard.webapi.json',
      'count_review_requests',
      {'func': ReviewRequest.objects.to_group}),
 
-    (r'^reviewrequests/to/user/(?P<username>[A-Za-z0-9_-]+)/$',
+    (r'^reviewrequests/to/user/(?P<user_or_username>[A-Za-z0-9_-]+)/$',
      'review_request_list',
      {'func': ReviewRequest.objects.to_user}),
-    (r'^reviewrequests/to/user/(?P<username>[A-Za-z0-9_-]+)/count/$',
+    (r'^reviewrequests/to/user/(?P<user_or_username>[A-Za-z0-9_-]+)/count/$',
      'count_review_requests',
      {'func': ReviewRequest.objects.to_user}),
 
-    (r'^reviewrequests/to/user/(?P<username>[A-Za-z0-9_-]+)/directly/$',
+    (r'^reviewrequests/to/user/(?P<user_or_username>[A-Za-z0-9_-]+)/directly/$',
      'review_request_list',
      {'func': ReviewRequest.objects.to_user_directly}),
-    (r'^reviewrequests/to/user/(?P<username>[A-Za-z0-9_-]+)/directly/count/$',
+    (r'^reviewrequests/to/user/(?P<user_or_username>[A-Za-z0-9_-]+)/directly/count/$',
      'count_review_requests',
      {'func': ReviewRequest.objects.to_user_directly}),
 
-    (r'^reviewrequests/from/user/(?P<username>[A-Za-z0-9_-]+)/$',
+    (r'^reviewrequests/from/user/(?P<user_or_username>[A-Za-z0-9_-]+)/$',
      'review_request_list',
      {'func': ReviewRequest.objects.from_user}),
-    (r'^reviewrequests/from/user/(?P<username>[A-Za-z0-9_-]+)/count/$',
+    (r'^reviewrequests/from/user/(?P<user_or_username>[A-Za-z0-9_-]+)/count/$',
      'count_review_requests',
      {'func': ReviewRequest.objects.from_user}),
 
@@ -157,6 +164,8 @@ urlpatterns += never_cache_patterns('reviewboard.webapi.json',
     # Diffs
     (r'^reviewrequests/(?P<review_request_id>[0-9]+)/diff/new/$',
      'new_diff'),
+    (r'^reviewrequests/(?P<review_request_id>[0-9]+)/diff/$',
+     'review_request_diffsets'),
 
     # Screenshots
     (r'^reviewrequests/(?P<review_request_id>[0-9]+)/screenshot/new/$',
@@ -173,4 +182,8 @@ urlpatterns += never_cache_patterns('reviewboard.webapi.json',
     # Screenshot comments
     (r'^reviewrequests/(?P<review_request_id>[0-9]+)/s/(?P<screenshot_id>[0-9]+)/comments/(?P<w>[0-9]+)x(?P<h>[0-9]+)\+(?P<x>[0-9]+)\+(?P<y>[0-9]+)/$',
      'screenshot_comments'),
+)
+
+urlpatterns += patterns('',
+    (r'^(?P<api_format>json|xml)/', include(deprecated_urlpatterns)),
 )

@@ -1,5 +1,4 @@
 import fnmatch
-import logging
 import os
 import re
 import subprocess
@@ -32,6 +31,107 @@ from reviewboard.scmtools.core import PRE_CREATION, HEAD
 
 DEFAULT_DIFF_COMPAT_VERSION = 1
 
+NEW_FILE_STR = _("New File")
+NEW_CHANGE_STR = _("New Change")
+
+NEWLINES_RE = re.compile(r'\r?\n')
+NEWLINE_CONVERSION_RE = re.compile(r'\r(\r?\n)?')
+
+ALPHANUM_RE = re.compile(r'\w')
+WHITESPACE_RE = re.compile(r'\s')
+
+
+# A list of regular expressions for headers in the source code that we can
+# display in collapsed regions of diffs and diff fragments in reviews.
+HEADER_REGEXES = {
+    '.cs': [
+        re.compile(
+            r'^\s*((public|private|protected|static)\s+)+'
+            r'([a-zA-Z_][a-zA-Z0-9_\.\[\]]*\s+)+?'     # return arguments
+            r'[a-zA-Z_][a-zA-Z0-9_]*'                  # method name
+            r'\s*\('                                   # signature start
+        ),
+        re.compile(
+            r'^\s*('
+            r'(public|static|private|protected|internal|abstract|partial)'
+            r'\s+)*'
+            r'(class|struct)\s+([A-Za-z0-9_])+'
+        ),
+    ],
+
+    # This can match C/C++/Objective C header files
+    '.c': [
+        re.compile(r'^@(interface|implementation|class|protocol)'),
+        re.compile(r'^[A-Za-z0-9$_]'),
+    ],
+    '.java': [
+        re.compile(
+            r'^\s*((public|private|protected|static)\s+)+'
+            r'([a-zA-Z_][a-zA-Z0-9_\.\[\]]*\s+)+?'     # return arguments
+            r'[a-zA-Z_][a-zA-Z0-9_]*'                  # method name
+            r'\s*\('                                   # signature start
+        ),
+        re.compile(
+            r'^\s*('
+            r'(public|static|private|protected)'
+            r'\s+)*'
+            r'(class|struct)\s+([A-Za-z0-9_])+'
+        ),
+    ],
+    '.js': [
+        re.compile(r'^\s*function [A-Za-z0-9_]+\s*\('),
+        re.compile(r'^\s*(var\s+)?[A-Za-z0-9_]+\s*[=:]\s*function\s*\('),
+    ],
+    '.m': [
+        re.compile(r'^@(interface|implementation|class|protocol)'),
+        re.compile(r'^[-+]\s+\([^\)]+\)\s+[A-Za-z0-9_]+[^;]*$'),
+        re.compile(r'^[A-Za-z0-9$_]'),
+    ],
+    '.php': [
+        re.compile(r'^\s*(class|function) [A-Za-z0-9_]+'),
+    ],
+    '.pl': [
+        re.compile(r'^\s*sub [A-Za-z0-9_]+'),
+    ],
+    '.py': [
+        re.compile(r'^\s*(def|class) [A-Za-z0-9_]+\s*\(?'),
+    ],
+    '.rb': [
+        re.compile(r'^\s*(def|class) [A-Za-z0-9_]+\s*\(?'),
+    ],
+}
+
+HEADER_REGEX_ALIASES = {
+    # C/C++
+    '.cc': '.c',
+    '.cpp': '.c',
+    '.cxx': '.c',
+    '.c++': '.c',
+    '.h': '.c',
+    '.hh': '.c',
+    '.hpp': '.c',
+    '.hxx': '.c',
+    '.h++': '.c',
+    '.C': '.c',
+    '.H': '.c',
+
+    # Perl
+    '.pm': '.pl',
+
+    # Python
+    'SConstruct': '.py',
+    'SConscript': '.py',
+    '.pyw': '.py',
+    '.sc': '.sc',
+
+    # Ruby
+    'Rakefile': '.rb',
+    '.rbw': '.rb',
+    '.rake': '.rb',
+    '.gemspec': '.rb',
+    '.rbx': '.rb',
+}
+
 
 class UserVisibleError(Exception):
     pass
@@ -39,6 +139,22 @@ class UserVisibleError(Exception):
 
 class DiffCompatError(Exception):
     pass
+
+
+class NoWrapperHtmlFormatter(HtmlFormatter):
+    """An HTML Formatter for Pygments that don't wrap items in a div."""
+    def __init__(self, *args, **kwargs):
+        super(NoWrapperHtmlFormatter, self).__init__(*args, **kwargs)
+
+    def _wrap_div(self, inner):
+        """
+        Method called by the formatter to wrap the contents of inner.
+        Inner is a list of tuples containing formatted code. If the first item
+        in the tuple is zero, then it's a wrapper, so we should ignore it.
+        """
+        for tup in inner:
+            if tup[0]:
+                yield tup
 
 
 def Differ(a, b, ignore_space=False,
@@ -69,17 +185,14 @@ def convert_line_endings(data):
     # it into a \n.
     #
     # See http://code.google.com/p/reviewboard/issues/detail?id=386
-    # and http://reviews.review-board.org/r/286/
+    # and http://reviews.reviewboard.org/r/286/
     if data == "":
         return ""
 
     if data[-1] == "\r":
         data = data[:-1]
 
-    temp = data.replace('\r\r\n', '\n')
-    temp = data.replace('\r\n', '\n')
-    temp = temp.replace('\r', '\n')
-    return temp
+    return NEWLINE_CONVERSION_RE.sub('\n', data)
 
 
 def patch(diff, file, filename):
@@ -195,11 +308,11 @@ def convert_to_utf8(s, enc):
     is really, really hard).
     """
     if isinstance(s, unicode):
-        return s
+        return s.encode('utf-8')
     elif isinstance(s, basestring):
         try:
             u = unicode(s, 'utf-8')
-            return u
+            return s
         except UnicodeError:
             for e in enc.split(','):
                 try:
@@ -261,6 +374,29 @@ def get_patched_file(buffer, filediff):
     return patch(filediff.diff, buffer, filediff.dest_file)
 
 
+def register_interesting_lines_for_filename(differ, filename):
+    """Registers regexes for interesting lines to a differ based on filename.
+
+    This will add watches for headers (functions, classes, etc.) to the diff
+    viewer. The regular expressions used are based on the filename provided.
+    """
+    # Add any interesting lines we may want to show.
+    regexes = []
+
+    if file in HEADER_REGEX_ALIASES:
+        regexes = HEADER_REGEXES[HEADER_REGEX_ALIASES[filename]]
+    else:
+        basename, ext = os.path.splitext(filename)
+
+        if ext in HEADER_REGEXES:
+            regexes = HEADER_REGEXES[ext]
+        elif ext in HEADER_REGEX_ALIASES:
+            regexes = HEADER_REGEXES[HEADER_REGEX_ALIASES[ext]]
+
+    for regex in regexes:
+        differ.add_interesting_line_regex('header', regex)
+
+
 def get_chunks(diffset, filediff, interfilediff, force_interdiff,
                enable_syntax_highlighting):
     def diff_line(vlinenum, oldlinenum, newlinenum, oldline, newline,
@@ -271,29 +407,96 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
         else:
             oldregion = newregion = []
 
-        return [vlinenum,
-                oldlinenum or '', mark_safe(oldmarkup or ''), oldregion,
-                newlinenum or '', mark_safe(newmarkup or ''), newregion,
-                (oldlinenum, newlinenum) in meta['whitespace_lines']]
+        result = [vlinenum,
+                  oldlinenum or '', mark_safe(oldmarkup or ''), oldregion,
+                  newlinenum or '', mark_safe(newmarkup or ''), newregion,
+                  (oldlinenum, newlinenum) in meta['whitespace_lines']]
 
-    def new_chunk(lines, numlines, tag, collapsable=False, meta={}):
+        if oldlinenum and oldlinenum in meta.get('moved', {}):
+            destination = meta["moved"][oldlinenum]
+            result.append(destination)
+        elif newlinenum and newlinenum in meta.get('moved', {}):
+            destination = meta["moved"][newlinenum]
+            result.append(destination)
+
+        return result
+
+    def new_chunk(lines, start, end, collapsable=False,
+                  tag='equal', meta=None):
+        if not meta:
+            meta = {}
+
+        left_headers = list(get_interesting_headers(differ, lines,
+                                                    start, end - 1, False))
+        right_headers = list(get_interesting_headers(differ, lines,
+                                                     start, end - 1, True))
+
+        meta['left_headers'] = left_headers
+        meta['right_headers'] = right_headers
+
+        if left_headers:
+            last_header[0] = left_headers[-1][1]
+
+        if right_headers:
+            last_header[1] = right_headers[-1][1]
+
+        if (collapsable and end < len(lines) and
+            (last_header[0] or last_header[1])):
+            meta['headers'] = [
+                (last_header[0] or "").strip(),
+                (last_header[1] or "").strip(),
+            ]
+
         return {
-            'lines': lines,
-            'numlines': numlines,
+            'lines': lines[start:end],
+            'numlines': end - start,
             'change': tag,
             'collapsable': collapsable,
             'meta': meta,
         }
 
-    def add_ranged_chunks(lines, start, end, collapsable=False):
-        chunks.append(new_chunk(lines[start:end], end - start, 'equal',
-                      collapsable))
+    def get_interesting_headers(differ, lines, start, end, is_modified_file):
+        """Returns all headers for a region of a diff.
+
+        This scans for all headers that fall within the specified range
+        of the specified lines on both the original and modified files.
+        """
+        possible_functions = differ.get_interesting_lines('header',
+                                                          is_modified_file)
+
+        if not possible_functions:
+            raise StopIteration
+
+        if is_modified_file:
+            last_index = last_header_index[1]
+            i1 = lines[start][4]
+            i2 = lines[end - 1][4]
+        else:
+            last_index = last_header_index[0]
+            i1 = lines[start][1]
+            i2 = lines[end - 1][1]
+
+        for i in xrange(last_index, len(possible_functions)):
+            linenum, line = possible_functions[i]
+            linenum += 1
+
+            if linenum > i2:
+                break
+            elif linenum >= i1:
+                last_index = i
+                yield (linenum, line)
+
+        if is_modified_file:
+            last_header_index[1] = last_index
+        else:
+            last_header_index[0] = last_index
 
     def apply_pygments(data, filename):
         # XXX Guessing is preferable but really slow, especially on XML
         #     files.
         #if filename.endswith(".xml"):
-        lexer = get_lexer_for_filename(filename, stripnl=False)
+        lexer = get_lexer_for_filename(filename, stripnl=False,
+                                       encoding='utf-8')
         #else:
         #    lexer = guess_lexer_for_filename(filename, data, stripnl=False)
 
@@ -303,7 +506,7 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
         except AttributeError:
             pass
 
-        return pygments.highlight(data, lexer, HtmlFormatter()).splitlines()
+        return pygments.highlight(data, lexer, NoWrapperHtmlFormatter()).splitlines()
 
 
     # There are three ways this function is called:
@@ -341,7 +544,6 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
     assert filediff
 
     file = filediff.source_file
-    revision = filediff.source_revision
 
     old = get_original_file(filediff)
     new = get_patched_file(old, filediff)
@@ -352,9 +554,7 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
         new = get_patched_file(interdiff_orig, interfilediff)
     elif force_interdiff:
         # Basically, revert the change.
-        temp = old
-        old = new
-        new = temp
+        old, new = new, old
 
     encoding = diffset.repository.encoding or 'iso-8859-15'
     old = convert_to_utf8(old, encoding)
@@ -368,8 +568,8 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
     if new and new[-1] != '\n':
         new += '\n'
 
-    a = re.split(r"\r?\n", old or '')
-    b = re.split(r"\r?\n", new or '')
+    a = NEWLINES_RE.split(old or '')
+    b = NEWLINES_RE.split(new or '')
 
     # Remove the trailing newline, now that we've split this. This will
     # prevent a duplicate line number at the end of the diff.
@@ -389,22 +589,27 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
         enable_syntax_highlighting = False
 
     if enable_syntax_highlighting:
+        repository = filediff.diffset.repository
+        tool = repository.get_scmtool()
+        source_file = tool.normalize_path_for_display(filediff.source_file)
+        dest_file = tool.normalize_path_for_display(filediff.dest_file)
         try:
             # TODO: Try to figure out the right lexer for these files
             #       once instead of twice.
-            markup_a = apply_pygments(old or '', filediff.source_file)
-            markup_b = apply_pygments(new or '', filediff.dest_file)
+            markup_a = apply_pygments(old or '', source_file)
+            markup_b = apply_pygments(new or '', dest_file)
         except ValueError:
             pass
 
     if not markup_a:
-        markup_a = re.split(r"\r?\n", escape(old))
+        markup_a = NEWLINES_RE.split(escape(old))
 
     if not markup_b:
-        markup_b = re.split(r"\r?\n", escape(new))
+        markup_b = NEWLINES_RE.split(escape(new))
 
-    chunks = []
     linenum = 1
+    last_header = [None, None]
+    last_header_index = [0, 0]
 
     ignore_space = True
     for pattern in siteconfig.get("diffviewer_include_space_patterns"):
@@ -415,15 +620,21 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
     differ = Differ(a, b, ignore_space=ignore_space,
                     compat_version=diffset.diffcompat)
 
+    # Register any regexes for interesting lines we may want to show.
+    register_interesting_lines_for_filename(differ, file)
+
     # TODO: Make this back into a preference if people really want it.
     context_num_lines = siteconfig.get("diffviewer_context_num_lines")
     collapse_threshold = 2 * context_num_lines + 3
 
     if interfilediff:
-        logging.debug("Generating diff chunks for interdiff ids %s-%s",
-                      filediff.id, interfilediff.id)
+        log_timer = log_timed(
+            "Generating diff chunks for interdiff ids %s-%s (%s)" %
+            (filediff.id, interfilediff.id, filediff.source_file))
     else:
-        logging.debug("Generating diff chunks for filediff id %s", filediff.id)
+        log_timer = log_timed(
+            "Generating diff chunks for filediff id %s (%s)" %
+            (filediff.id, filediff.source_file))
 
     for tag, i1, i2, j1, j2, meta in opcodes_with_metadata(differ):
         oldlines = markup_a[i1:i2]
@@ -434,44 +645,70 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
                     xrange(linenum, linenum + numlines),
                     xrange(i1 + 1, i2 + 1), xrange(j1 + 1, j2 + 1),
                     a[i1:i2], b[j1:j2], oldlines, newlines)
-        linenum += numlines
 
         if tag == 'equal' and numlines > collapse_threshold:
             last_range_start = numlines - context_num_lines
 
-            if len(chunks) == 0:
-                add_ranged_chunks(lines, 0, last_range_start, True)
-                add_ranged_chunks(lines, last_range_start, numlines)
+            if linenum == 1:
+                yield new_chunk(lines, 0, last_range_start, True)
+                yield new_chunk(lines, last_range_start, numlines)
             else:
-                add_ranged_chunks(lines, 0, context_num_lines)
+                yield new_chunk(lines, 0, context_num_lines)
 
                 if i2 == a_num_lines and j2 == b_num_lines:
-                    add_ranged_chunks(lines, context_num_lines, numlines, True)
+                    yield new_chunk(lines, context_num_lines, numlines, True)
                 else:
-                    add_ranged_chunks(lines, context_num_lines,
-                                      last_range_start, True)
-                    add_ranged_chunks(lines, last_range_start, numlines)
+                    yield new_chunk(lines, context_num_lines,
+                                    last_range_start, True)
+                    yield new_chunk(lines, last_range_start, numlines)
         else:
-            chunks.append(new_chunk(lines, numlines, tag, meta=meta))
+            yield new_chunk(lines, 0, numlines, False, tag, meta)
 
-    if interfilediff:
-        logging.debug("Done generating diff chunks for interdiff ids %s-%s",
-                      filediff.id, interfilediff.id)
-    else:
-        logging.debug("Done generating diff chunks for filediff id %s",
-                      filediff.id)
+        linenum += numlines
 
-    return chunks
+    log_timer.done()
+
+
+def is_valid_move_range(lines):
+    """Determines if a move range is valid and should be included.
+
+    This performs some tests to try to eliminate trivial changes that
+    shouldn't have moves associated.
+
+    Specifically, a move range is valid if it has at least one line
+    with alpha-numeric characters and is at least 4 characters long when
+    stripped.
+    """
+    for line in lines:
+        line = line.strip()
+
+        if len(line) >= 4 and ALPHANUM_RE.search(line):
+            return True
+
+    return False
+
 
 def opcodes_with_metadata(differ):
-    groups = []
+    """Returns opcodes from the differ with extra metadata.
 
-    ws_re = re.compile(r"\s")
+    This is a wrapper around a differ's get_opcodes function, which returns
+    extra metadata along with each range. That metadata includes information
+    on moved blocks of code and whitespace-only lines.
+
+    This returns a list of opcodes as tuples in the form of
+    (tag, i1, i2, j1, j2, meta).
+    """
+    groups = []
+    removes = {}
+    inserts = []
 
     for tag, i1, i2, j1, j2 in differ.get_opcodes():
         meta = {
-            "whitespace_chunk": False, # True if this chunk is only whitespace.
-            "whitespace_lines": [], # List of tuples (x,y), with whitespace changes.
+            # True if this chunk is only whitespace.
+            "whitespace_chunk": False,
+
+            # List of tuples (x,y), with whitespace changes.
+            "whitespace_lines": [],
         }
 
         if tag == 'replace':
@@ -479,16 +716,191 @@ def opcodes_with_metadata(differ):
             assert (i2 - i1) == (j2 - j1)
 
             for i, j in zip(xrange(i1, i2), xrange(j1, j2)):
-                if ws_re.sub("", differ.a[i]) == ws_re.sub("", differ.b[j]):
+                if (WHITESPACE_RE.sub("", differ.a[i]) ==
+                    WHITESPACE_RE.sub("", differ.b[j])):
+                    # Both original lines are equal when removing all
+                    # whitespace, so include their original line number in
+                    # the meta dict.
                     meta["whitespace_lines"].append((i + 1, j + 1))
 
+            # If all lines are considered to have only whitespace change,
+            # the whole chunk is considered a whitespace-only chunk.
             if len(meta["whitespace_lines"]) == (i2 - i1):
                 meta["whitespace_chunk"] = True
 
-        groups.append((tag, i1, i2, j1, j2, meta))
+        group = (tag, i1, i2, j1, j2, meta)
+        groups.append(group)
 
-    for group in groups:
-        yield group
+        # Store delete/insert ranges for later lookup. We will be building
+        # keys that in most cases will be unique for the particular block
+        # of text being inserted/deleted. There is a chance of collision,
+        # so we store a list of matching groups under that key.
+        #
+        # Later, we will loop through the keys and attempt to find insert
+        # keys/groups that match remove keys/groups.
+        if tag == 'delete':
+            for i in xrange(i1, i2):
+                line = differ.a[i].strip()
+
+                if line:
+                    removes.setdefault(line, []).append((i, group))
+        elif tag == 'insert':
+            inserts.append(group)
+
+    # We now need to figure out all the moved locations.
+    #
+    # At this point, we know all the inserted groups, and all the individually
+    # deleted lines. We'll be going through and finding consecutive groups
+    # of matching inserts/deletes that represent a move block.
+    #
+    # The algorithm will be documented as we go in the code.
+    #
+    # We start by looping through all the inserted groups.
+    for itag, ii1, ii2, ij1, ij2, imeta in inserts:
+        # Store some state on the range we'll be working with inside this
+        # insert group.
+        #
+        # i_move_cur is the current location inside the insert group
+        # (from ij1 through ij2).
+        #
+        # i_move_range is the current range of consecutive lines that we'll
+        # use for a move. Each line in this range has a corresponding
+        # consecutive delete line.
+        #
+        # r_move_ranges represents deleted move ranges. The key is a
+        # string in the form of "{i1}-{i2}-{j1}-{j2}", with those positions
+        # taken from the remove group for the line. The value
+        # is an array of tuples of (r_start, r_end, r_group). These values
+        # are used to quickly locate deleted lines we've found that match
+        # the inserted lines, so we can assemble ranges later.
+        i_move_cur = ij1
+        i_move_range = (i_move_cur, i_move_cur)
+        r_move_ranges = {} # key -> [(start, end, group)]
+
+        # Loop through every location from ij1 through ij2 until we've
+        # reached the end.
+        while i_move_cur <= ij2:
+            try:
+                iline = differ.b[i_move_cur].strip()
+            except IndexError:
+                iline = None
+
+            if iline is not None and iline in removes:
+                # The inserted line at this location has a corresponding
+                # removed line.
+                #
+                # If there's already some information on removed line ranges
+                # for this particular move block we're processing then we'll
+                # update the range.
+                #
+                # The way we do that is to find each removed line that
+                # matches this inserted line, and for each of those find
+                # out if there's an existing move range that the found
+                # removed line immediately follows. If there is, we update
+                # the existing range.
+                #
+                # If there isn't any move information for this line, we'll
+                # simply add it to the move ranges.
+                for ri, rgroup in removes.get(iline, []):
+                    key = "%s-%s-%s-%s" % rgroup[1:5]
+
+                    if r_move_ranges:
+                        for i, r_move_range in \
+                            enumerate(r_move_ranges.get(key, [])):
+                            # If the remove information for the line is next in
+                            # the sequence for this calculated move range...
+                            if ri == r_move_range[1] + 1:
+                                r_move_ranges[key][i] = (r_move_range[0], ri,
+                                                         rgroup)
+                                break
+                    else:
+                        # We don't have any move ranges yet, so it's time to
+                        # build one based on any removed lines we find that
+                        # match the inserted line.
+                        r_move_ranges[key] = [(ri, ri, rgroup)]
+
+                # On to the next line in the sequence...
+                i_move_cur += 1
+            else:
+                # We've reached the very end of the insert group. See if
+                # we have anything that looks like a move.
+                if r_move_ranges:
+                    r_move_range = None
+
+                    # Go through every range of lines we've found and
+                    # find the longest.
+                    #
+                    # The longest move range wins. If we find two ranges that
+                    # are equal, though, we'll ignore both. The idea is that
+                    # if we have two identical moves, then it's probably
+                    # common enough code that we don't want to show the move.
+                    # An example might be some standard part of a comment
+                    # block, with no real changes in content.
+                    #
+                    # Note that with the current approach, finding duplicate
+                    # moves doesn't cause us to reset the winning range
+                    # to the second-highest identical match. We may want to
+                    # do that down the road, but it means additional state,
+                    # and this is hopefully uncommon enough to not be a real
+                    # problem.
+                    for ranges in r_move_ranges.itervalues():
+                        for r1, r2, rgroup in ranges:
+                            if not r_move_range:
+                                r_move_range = (r1, r2, rgroup)
+                            else:
+                                len1 = r_move_range[2] - r_move_range[1]
+                                len2 = r2 - r1
+
+                                if len1 < len2:
+                                    r_move_range = (r1, r2, rgroup)
+                                elif len1 == len2:
+                                    # If there are two that are the same, it
+                                    # may be common code that we don't want to
+                                    # see moves for. Comments, for example.
+                                    r_move_range = None
+
+                    # If we have a move range, see if it's one we want to
+                    # include or filter out. Some moves are not impressive
+                    # enough to display. For example, a small portion of a
+                    # comment, or whitespace-only changes.
+                    if (r_move_range and
+                        is_valid_move_range(
+                            differ.a[r_move_range[0]:r_move_range[1]])):
+
+                        # Rebuild the insert and remove ranges based on
+                        # where we are now and which range we won.
+                        #
+                        # The new ranges will be actual lists of positions,
+                        # rather than a beginning and end. These will be
+                        # provided to the renderer.
+                        #
+                        # The ranges expected by the renderers are 1-based,
+                        # whereas our calculations for this algorithm are
+                        # 0-based, so we add 1 to the numbers.
+                        #
+                        # The upper boundaries passed to the range() function
+                        # must actually be one higher than the value we want.
+                        # So, for r_move_range, we actually increment by 2.
+                        # We only increment i_move_cur by one, because
+                        # i_move_cur already factored in the + 1 by being
+                        # at the end of the while loop.
+                        i_move_range = range(i_move_range[0] + 1,
+                                             i_move_cur + 1)
+                        r_move_range = range(r_move_range[0] + 1,
+                                             r_move_range[1] + 2)
+
+                        rmeta = rgroup[-1]
+                        rmeta.setdefault('moved', {}).update(
+                            dict(zip(r_move_range, i_move_range)))
+                        imeta.setdefault('moved', {}).update(
+                            dict(zip(i_move_range, r_move_range)))
+
+                # Reset the state for the next range.
+                i_move_cur += 1
+                i_move_range = (i_move_cur, i_move_cur)
+                r_move_ranges = {}
+
+    return groups
 
 
 def get_revision_str(revision):
@@ -571,17 +983,15 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
         # the source filediff and not specify an interdiff. Keeps things
         # simple, code-wise, since we really have no need to special-case
         # this.
-        for interdiff in interdiff_map.values():
-            filediff_parts.append((interdiff, None, False))
+        filediff_parts += [(interdiff, None, False)
+                           for interdiff in interdiff_map.values()]
 
 
     files = []
-    index = 0
 
     for parts in filediff_parts:
         filediff, interfilediff, force_interdiff = parts
 
-        filediff_revision_str = get_revision_str(filediff.source_revision)
         newfile = (filediff.source_revision == PRE_CREATION)
 
         if interdiffset:
@@ -603,9 +1013,9 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
             source_revision = get_revision_str(filediff.source_revision)
 
             if newfile:
-                dest_revision = _("New File")
+                dest_revision = NEW_FILE_STR
             else:
-                dest_revision = _("New Change")
+                dest_revision = NEW_CHANGE_STR
 
         i = filediff.source_file.rfind('/')
 
@@ -626,6 +1036,7 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
             'interfilediff': interfilediff,
             'force_interdiff': force_interdiff,
             'binary': filediff.binary,
+            'deleted': filediff.deleted,
             'newfile': newfile,
             'index': len(files),
         }
@@ -633,7 +1044,7 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
         if load_chunks:
             chunks = []
 
-            if not filediff.binary:
+            if not filediff.binary and not filediff.deleted:
                 key = key_prefix
 
                 if not force_interdiff:
@@ -645,26 +1056,27 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
 
                 chunks = cache_memoize(
                     key,
-                    lambda: get_chunks(filediff.diffset,
-                                       filediff, interfilediff,
-                                       force_interdiff,
-                                       enable_syntax_highlighting),
+                    lambda: list(get_chunks(filediff.diffset,
+                                            filediff, interfilediff,
+                                            force_interdiff,
+                                            enable_syntax_highlighting)),
                     large_data=True)
 
             file['chunks'] = chunks
-            file['changed_chunks'] = []
+            file['changed_chunk_indexes'] = []
             file['whitespace_only'] = True
 
             for j, chunk in enumerate(file['chunks']):
                 chunk['index'] = j
+
                 if chunk['change'] != 'equal':
-                    file['changed_chunks'].append(chunk)
+                    file['changed_chunk_indexes'].append(j)
                     meta = chunk.get('meta', {})
 
                     if not meta.get('whitespace_chunk', False):
                         file['whitespace_only'] = False
 
-            file['num_changes'] = len(file['changed_chunks'])
+            file['num_changes'] = len(file['changed_chunk_indexes'])
 
         files.append(file)
 
@@ -672,7 +1084,8 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
         # Sort based on basepath in asc order
         if x["basepath"] != y["basepath"]:
             return cmp(x["basepath"], y["basepath"])
-        # Sort based on filename in asc order, then basod on extension in desc
+
+        # Sort based on filename in asc order, then based on extension in desc
         # order, to make *.h be ahead of *.c/cpp
         x_file, x_ext = os.path.splitext(x["basename"])
         y_file, y_ext = os.path.splitext(y["basename"])
@@ -726,6 +1139,11 @@ def get_file_chunks_in_range(context, filediff, interfilediff,
       7        True if line consists of only whitespace changes
       ======== =============================================================
     """
+    def find_header(headers):
+        for header in reversed(headers):
+            if header[0] < first_line:
+                return header[1]
+
     interdiffset = None
 
     key = "_diff_files_%s_%s" % (filediff.diffset.id, filediff.id)
@@ -746,9 +1164,15 @@ def get_file_chunks_in_range(context, filediff, interfilediff,
         raise StopIteration
 
     assert len(files) == 1
+    last_header = (None, None)
 
     for chunk in files[0]['chunks']:
+        if ('headers' in chunk['meta'] and
+            (chunk['meta']['headers'][0] or chunk['meta']['headers'][1])):
+            last_header = chunk['meta']['headers']
+
         lines = chunk['lines']
+
         if lines[-1][0] >= first_line >= lines[0][0]:
             start_index = first_line - lines[0][0]
 
@@ -761,8 +1185,24 @@ def get_file_chunks_in_range(context, filediff, interfilediff,
                 'lines': chunk['lines'][start_index:last_index],
                 'numlines': last_index - start_index,
                 'change': chunk['change'],
-                'meta': chunk['meta'],
+                'meta': chunk.get('meta', {}),
             }
+
+            if 'left_headers' in chunk['meta']:
+                left_header = find_header(chunk['meta']['left_headers'])
+                right_header = find_header(chunk['meta']['right_headers'])
+                del new_chunk['meta']['left_headers']
+                del new_chunk['meta']['right_headers']
+
+                if left_header or right_header:
+                    header = (left_header, right_header)
+                else:
+                    header = last_header
+
+                new_chunk['meta']['headers'] = [
+                    (header[0] or "").strip(),
+                    (header[1] or "").strip(),
+                ]
 
             yield new_chunk
 

@@ -19,14 +19,14 @@ class NoBaseDirError(ValueError):
 
 class UploadDiffForm(forms.Form):
     basedir = forms.CharField(
-        label=_("Base directory"),
+        label=_("Base Directory"),
         help_text=_("The absolute path in the repository the diff was "
                     "generated in."))
     path = forms.FileField(
         label=_("Diff"),
         help_text=_("The new diff to upload."))
     parent_diff_path = forms.FileField(
-        label=_("Parent diff"),
+        label=_("Parent Diff"),
         help_text=_("An optional diff that the main diff is based on. "
                     "This is usually used for distributed revision control "
                     "systems (Git, Mercurial, etc.)."),
@@ -52,7 +52,7 @@ class UploadDiffForm(forms.Form):
         # Grab the base directory if there is one.
         if not tool.get_diffs_use_absolute_paths():
             try:
-                basedir = smart_unicode(self.cleaned_data['basedir'])
+                basedir = smart_unicode(self.cleaned_data['basedir'].strip())
             except AttributeError:
                 raise NoBaseDirError(_('The "Base Diff Path" field is required'))
         else:
@@ -89,6 +89,7 @@ class UploadDiffForm(forms.Form):
                     parent_changeset_id = f.origChangesetId
 
         diffset = DiffSet(name=diff_file.name, revision=0,
+                          basedir=basedir,
                           history=diffset_history,
                           diffcompat=DEFAULT_DIFF_COMPAT_VERSION)
         diffset.repository = self.repository
@@ -111,6 +112,11 @@ class UploadDiffForm(forms.Form):
 
             dest_file = os.path.join(basedir, f.newFile).replace("\\", "/")
 
+            if f.deleted:
+                status = FileDiff.DELETED
+            else:
+                status = FileDiff.MODIFIED
+
             filediff = FileDiff(diffset=diffset,
                                 source_file=f.origFile,
                                 dest_file=dest_file,
@@ -118,7 +124,8 @@ class UploadDiffForm(forms.Form):
                                 dest_detail=f.newInfo,
                                 diff=f.data,
                                 parent_diff=parent_content,
-                                binary=f.binary)
+                                binary=f.binary,
+                                status=status)
             filediff.save()
 
         return diffset
@@ -137,6 +144,7 @@ class UploadDiffForm(forms.Form):
             if (revision != PRE_CREATION and
                 revision != UNKNOWN and
                 not f.binary and
+                not f.deleted and
                 (check_existance and
                  not tool.file_exists(filename, revision))):
                 raise FileNotFoundError(filename, revision)
