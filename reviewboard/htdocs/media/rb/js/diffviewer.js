@@ -1065,9 +1065,10 @@ function addCommentFlags(table, lines, key) {
  * @param {string} tbody_id            The tbody ID to insert into.
  */
 function expandChunk(review_base_url, fileid, filediff_id, revision,
-                     interdiff_revision, chunk_index, link) {
+                     interdiff_revision, chunk_index, limit_num_lines, link) {
     gDiff.getDiffFragment(review_base_url, fileid, filediff_id, revision,
-                          interdiff_revision, chunk_index, function(html) {
+                          interdiff_revision, chunk_index, limit_num_lines,
+                          function(html) {
         var tbody = $(link).parents("tbody.diff-header");
         var table = tbody.parent();
         var key = "file" + filediff_id;

@@ -39,8 +39,14 @@ def build_diff_fragment(request, file, chunkindex, highlighting, collapseall,
             raise UserVisibleError(_(u"Invalid chunk index %s specified.") % \
                                    chunkindex)
 
+        print '**** Chunks: %s' % len(file['chunks'])
         file['chunks'] = [file['chunks'][chunkindex]]
         key += '-chunk-%s' % chunkindex
+
+        limit_num_lines = request.GET.get('limit_num_lines', None)
+
+        if limit_num_lines:
+            key += '-%s' % limit_num_lines
 
     if collapseall:
         key += '-collapsed'
@@ -190,7 +196,7 @@ def view_diff_fragment(
 
     def get_requested_diff_file(get_chunks=True):
         files = get_diff_files(diffset, filediff, interdiffset, highlighting,
-                               get_chunks)
+                               get_chunks, limit_num_lines)
 
         if files:
             assert len(files) == 1
@@ -208,7 +214,12 @@ def view_diff_fragment(
     interdiffset = get_object_or_none(DiffSet, pk=interdiffset_id)
     highlighting = get_enable_highlighting(request.user)
 
-    if chunkindex:
+    try:
+        limit_num_lines = int(request.GET.get('limit_num_lines', None))
+    except TypeError:
+        limit_num_lines = None
+
+    if chunkindex and not limit_num_lines:
         collapseall = False
     else:
         collapseall = get_collapse_diff(request)

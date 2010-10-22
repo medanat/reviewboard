@@ -398,7 +398,7 @@ def register_interesting_lines_for_filename(differ, filename):
 
 
 def get_chunks(diffset, filediff, interfilediff, force_interdiff,
-               enable_syntax_highlighting):
+               enable_syntax_highlighting, num_lines_limit):
     def diff_line(vlinenum, oldlinenum, newlinenum, oldline, newline,
                   oldmarkup, newmarkup):
         # This function accesses the variable meta, defined in an outer context.
@@ -624,8 +624,10 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
     register_interesting_lines_for_filename(differ, file)
 
     # TODO: Make this back into a preference if people really want it.
-    context_num_lines = siteconfig.get("diffviewer_context_num_lines")
+    context_num_lines = num_lines_limit or siteconfig.get("diffviewer_context_num_lines")
     collapse_threshold = 2 * context_num_lines + 3
+
+    print '*** Limiting to %s' % context_num_lines
 
     if interfilediff:
         log_timer = log_timed(
@@ -914,7 +916,7 @@ def get_revision_str(revision):
 
 def get_diff_files(diffset, filediff=None, interdiffset=None,
                    enable_syntax_highlighting=True,
-                   load_chunks=True):
+                   load_chunks=True, num_lines=None):
     if filediff:
         filediffs = [filediff]
 
@@ -1059,7 +1061,8 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
                     lambda: list(get_chunks(filediff.diffset,
                                             filediff, interfilediff,
                                             force_interdiff,
-                                            enable_syntax_highlighting)),
+                                            enable_syntax_highlighting,
+                                            num_lines)),
                     large_data=True)
 
             file['chunks'] = chunks
