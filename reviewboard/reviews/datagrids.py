@@ -1,17 +1,17 @@
 from django.conf import settings
 from django.contrib.auth.models import User
-from django.core.urlresolvers import reverse
-from django.db.models import Q, Count
 from django.http import Http404
+from django.utils.datastructures import SortedDict
 from django.utils.html import conditional_escape
 from django.utils.translation import ugettext_lazy as _
 from djblets.datagrid.grids import Column, DateTimeColumn, \
                                    DateTimeSinceColumn, DataGrid
 from djblets.util.templatetags.djblets_utils import ageid
 
-from reviewboard.accounts.models import Profile, LocalSiteProfile
+from reviewboard.accounts.models import Profile
 from reviewboard.reviews.models import Group, ReviewRequest
 from reviewboard.reviews.templatetags.reviewtags import render_star
+from reviewboard.site.urlresolvers import local_site_reverse
 
 
 class StarColumn(Column):
@@ -205,6 +205,27 @@ class MyCommentsColumn(Column):
                  self.image_height, image_alt, image_alt)
 
 
+class ToMeColumn(Column):
+    """
+    A column used to indicate whether the current logged-in user is targeted
+    by the review request.
+    """
+    def __init__(self, *args, **kwargs):
+        Column.__init__(self, *args, **kwargs)
+        self.label = u"\u00BB"  # this is &raquo;
+        self.detailed_label = u"\u00BB To Me"
+        self.shrink = True
+
+    def render_data(self, review_request):
+        user = self.datagrid.request.user
+        if (user.is_authenticated() and
+            review_request.target_people.filter(pk=user.pk).exists()):
+            return '<div title="%s"><b>&raquo;</b></div>' % \
+                    (self.detailed_label)
+
+        return ""
+
+
 class NewUpdatesColumn(Column):
     """
     A column used to indicate whether the review request has any new updates
@@ -262,21 +283,21 @@ class SummaryColumn(Column):
         if review_request.submitter_id == self.datagrid.request.user.id:
             if review_request.draft_summary is not None:
                 summary = conditional_escape(review_request.draft_summary)
-                return self.__labeled_summary(_('Draft'), summary)
+                return self.__labeled_summary(_('Draft'), summary, 'label-draft')
 
             if (not review_request.public and
                 review_request.status == ReviewRequest.PENDING_REVIEW):
-                return self.__labeled_summary(_('Draft'), summary)
+                return self.__labeled_summary(_('Draft'), summary, 'label-draft')
 
         if review_request.status == ReviewRequest.SUBMITTED:
-            return self.__labeled_summary(_('Submitted'), summary)
+            return self.__labeled_summary(_('Submitted'), summary, 'label-submitted')
         elif review_request.status == ReviewRequest.DISCARDED:
-            return self.__labeled_summary(_('Discarded'), summary)
+            return self.__labeled_summary(_('Discarded'), summary, 'label-discarded')
 
         return summary
 
-    def __labeled_summary(self, label, summary):
-        return u'<span class="draftlabel">[%s]</span> %s' % (label, summary)
+    def __labeled_summary(self, label, summary, label_class):
+        return u'<span class="%s">[%s]</span> %s' % (label_class, label, summary)
 
 
 class SubmitterColumn(Column):
@@ -313,6 +334,32 @@ class PendingCountColumn(Column):
                                                         status='P').count())
 
 
+class PeopleColumn(Column):
+    def __init__(self, *args, **kwargs):
+        Column.__init__(self, *args, **kwargs)
+        self.label = _("People")
+        self.detailed_label = _("Target People")
+        self.sortable = False
+        self.shrink = False
+
+    def render_data(self, review_request):
+        people = review_request.target_people.all()
+        return reduce(lambda a,d: a+d.username+' ', people, '')
+
+
+class GroupsColumn(Column):
+    def __init__(self, *args, **kwargs):
+        Column.__init__(self, *args, **kwargs)
+        self.label = _("Groups")
+        self.detailed_label = _("Target Groups")
+        self.sortable = False
+        self.shrink = False
+
+    def render_data(self, review_request):
+        groups = review_request.target_groups.all()
+        return reduce(lambda a,d: a+d.name+' ', groups, '')
+
+
 class GroupMemberCountColumn(Column):
     """
     A column used to show the number of users that registered for a group.
@@ -326,7 +373,9 @@ class GroupMemberCountColumn(Column):
         return str(group.users.count())
 
     def link_to_object(self, group, value):
-        return reverse('group_members', args=[group.name])
+        return local_site_reverse('group_members',
+                                  request=self.datagrid.request,
+                                  args=[group.name])
 
 
 class ReviewCountColumn(Column):
@@ -408,7 +457,11 @@ class ReviewRequestDataGrid(DataGrid):
 
     review_count = ReviewCountColumn()
 
-    review_id = Column(_("Review ID"), field_name="id", db_field="id",
+    target_groups = GroupsColumn()
+    target_people = PeopleColumn()
+    to_me = ToMeColumn()
+
+    review_id = Column(_("Review ID"), field_name="get_display_id",
                        shrink=True, sortable=True, link=True)
 
     def __init__(self, *args, **kwargs):
@@ -428,9 +481,13 @@ class ReviewRequestDataGrid(DataGrid):
         if profile:
             self.show_submitted = profile.show_submitted
 
-        self.show_submitted = \
-            int(self.request.GET.get('show_submitted',
+        try:
+            self.show_submitted = \
+                int(self.request.GET.get('show_submitted',
                                      self.show_submitted)) != 0
+        except ValueError:
+            # do nothing
+            pass
 
         if self.show_submitted:
             # There are only three states: Published, Submitted and Discarded.
@@ -454,7 +511,8 @@ class ReviewRequestDataGrid(DataGrid):
 
     def link_to_object(self, obj, value):
         if value and isinstance(value, User):
-            return reverse("user", args=[value])
+            return local_site_reverse("user", request=self.request,
+                                      args=[value])
 
         return obj.get_absolute_url()
 
@@ -562,7 +620,7 @@ class SubmitterDataGrid(DataGrid):
                  title=_("All submitters"),
                  local_site=None):
         if local_site:
-            qs = queryset.filter(localsite=local_site)
+            qs = queryset.filter(local_site=local_site)
         else:
             qs = queryset
 
@@ -574,9 +632,9 @@ class SubmitterDataGrid(DataGrid):
             "username", "fullname", "pending_count"
         ]
 
-    @staticmethod
-    def link_to_object(obj, value):
-        return reverse("user", args=[obj.username])
+    def link_to_object(self, obj, value):
+        return local_site_reverse("user", request=self.request,
+                                  args=[obj.username])
 
 
 class GroupDataGrid(DataGrid):
@@ -653,14 +711,16 @@ def get_sidebar_counts(user, local_site):
         'to-me': site_profile.direct_incoming_request_count,
         'starred': site_profile.starred_public_request_count,
         'mine': site_profile.total_outgoing_request_count,
-        'groups': {},
-        'starred_groups': {},
+        'groups': SortedDict(),
+        'starred_groups': SortedDict(),
     }
 
-    for group in Group.objects.filter(users=user, local_site=local_site):
+    for group in Group.objects.filter(
+            users=user, local_site=local_site).order_by('name'):
         counts['groups'][group.name] = group.incoming_request_count
 
-    for group in Group.objects.filter(starred_by=user, local_site=local_site):
+    for group in Group.objects.filter(
+            starred_by=user, local_site=local_site).order_by('name'):
         counts['starred_groups'][group.name] = group.incoming_request_count
 
     return counts

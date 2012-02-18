@@ -21,6 +21,8 @@ class PreferencesForm(forms.Form):
                                        required=False)
     syntax_highlighting = forms.BooleanField(required=False,
         label=_("Enable syntax highlighting in the diff viewer"))
+    profile_private = forms.BooleanField(required=False,
+        label=_("Keep your user profile private"))
     first_name = forms.CharField(required=False)
     last_name = forms.CharField(required=False)
     email = forms.EmailField()
@@ -28,16 +30,53 @@ class PreferencesForm(forms.Form):
     password2 = forms.CharField(required=False, widget=widgets.PasswordInput())
 
     def __init__(self, user, *args, **kwargs):
-        forms.Form.__init__(self, *args, **kwargs)
+        from reviewboard.accounts.backends import get_auth_backends
 
-        siteconfig = SiteConfiguration.objects.get_current()
-        auth_backend = siteconfig.get("auth_backend")
+        super(forms.Form, self).__init__(*args, **kwargs)
 
-        self.fields['groups'].choices = [
-            (g.id, g.display_name)
-            for g in Group.objects.accessible(user=user)
-        ]
-        self.fields['email'].required = (auth_backend == "builtin")
+        auth_backends = get_auth_backends()
+        choices = []
+
+        for g in Group.objects.accessible(user=user).order_by('display_name'):
+            choices.append((g.id, g.display_name))
+
+        for site in user.local_site.all().order_by('name'):
+            for g in Group.objects.accessible(
+                user=user, local_site=site).order_by('display_name'):
+                display_name = '%s / %s' % (g.local_site.name, g.display_name)
+                choices.append((g.id, display_name))
+
+        self.fields['groups'].choices = choices
+        self.fields['email'].required = auth_backends[0].supports_change_email
+
+    def save(self, user):
+        from reviewboard.accounts.backends import get_auth_backends
+
+        auth_backends = get_auth_backends()
+        primary_backend = auth_backends[0]
+
+        password = self.cleaned_data['password1']
+
+        if primary_backend.supports_change_password and password:
+            primary_backend.update_password(user, password)
+
+        if primary_backend.supports_change_name:
+            user.first_name = self.cleaned_data['first_name']
+            user.last_name = self.cleaned_data['last_name']
+            primary_backend.update_name(user)
+
+        if primary_backend.supports_change_email:
+            user.email = self.cleaned_data['email']
+            primary_backend.update_email(user)
+
+        user.review_groups = self.cleaned_data['groups']
+        user.save()
+
+        profile = user.get_profile()
+        profile.first_time_setup_done = True
+        profile.syntax_highlighting = self.cleaned_data['syntax_highlighting']
+        profile.is_private = self.cleaned_data['profile_private']
+        profile.save()
 
     def clean_password2(self):
         p1 = self.cleaned_data['password1']
@@ -55,6 +94,8 @@ class RegistrationForm(DjbletsRegistrationForm):
     for use when generating the widget so that the widget can properly display
     the error.
     """
+    first_name = forms.CharField(required=False)
+    last_name = forms.CharField(required=False)
     recaptcha_challenge_field = forms.CharField(required=False)
     recaptcha_response_field = forms.CharField(required=False)
 
@@ -102,6 +143,16 @@ class RegistrationForm(DjbletsRegistrationForm):
                     _('You need to respond to the captcha'))
 
         return super(RegistrationForm, self).clean()
+
+    def save(self):
+        user = DjbletsRegistrationForm.save(self)
+
+        if user:
+            user.first_name = self.cleaned_data['first_name']
+            user.last_name = self.cleaned_data['last_name']
+            user.save()
+
+        return user
 
 
 class ActiveDirectorySettingsForm(SiteSettingsForm):
@@ -174,7 +225,7 @@ class ActiveDirectorySettingsForm(SiteSettingsForm):
         title = _('Active Directory Authentication Settings')
 
 
-class BuiltinAuthSettingsForm(SiteSettingsForm):
+class StandardAuthSettingsForm(SiteSettingsForm):
     auth_enable_registration = forms.BooleanField(
         label=_("Enable registration"),
         help_text=_("Allow users to register new accounts."),
@@ -203,6 +254,24 @@ class BuiltinAuthSettingsForm(SiteSettingsForm):
         required=False,
         widget=forms.TextInput(attrs={'size': '40'}))
 
+    def clean_recaptcha_public_key(self):
+        """Validates that the reCAPTCHA public key is specified if needed."""
+        key = self.cleaned_data['recaptcha_public_key'].strip()
+
+        if self.cleaned_data['auth_registration_show_captcha'] and not key:
+            raise forms.ValidationError(_('This field is required.'))
+
+        return key
+
+    def clean_recaptcha_private_key(self):
+        """Validates that the reCAPTCHA private key is specified if needed."""
+        key = self.cleaned_data['recaptcha_private_key'].strip()
+
+        if self.cleaned_data['auth_registration_show_captcha'] and not key:
+            raise forms.ValidationError(_('This field is required.'))
+
+        return key
+
     class Meta:
         title = _('Basic Authentication Settings')
 
@@ -219,6 +288,27 @@ class LDAPSettingsForm(SiteSettingsForm):
         help_text=_("The LDAP Base DN for performing LDAP searches.  For "
                     "example: ou=users,dc=example,dc=com"),
         required=True)
+
+    auth_ldap_given_name_attribute = forms.CharField(
+        label=_("Given Name Attribute"),
+        initial="givenName",
+        help_text=_("The attribute in the LDAP server that stores the user's "
+                    "given name."),
+        required=False)
+
+    auth_ldap_surname_attribute = forms.CharField(
+        label=_("Surname Attribute"),
+        initial="sn",
+        help_text=_("The attribute in the LDAP server that stores the user's "
+                    "surname."),
+        required=False)
+
+    auth_ldap_full_name_attribute = forms.CharField(
+        label=_("Full Name Attribute"),
+        help_text=_("The attribute in the LDAP server that stores the user's "
+                    "full name.  This takes precedence over the "
+                    '"Full Name Attribute" and "Surname Attribute."'),
+        required=False)
 
     auth_ldap_email_domain = forms.CharField(
         label=_("E-Mail Domain"),
@@ -242,7 +332,8 @@ class LDAPSettingsForm(SiteSettingsForm):
         initial="uid=%s,ou=users,dc=example,dc=com",
         help_text=_("The string representing the user. Use \"%(varname)s\" "
                     "where the username would normally go. For example: "
-                    "(uid=%(varname)s)") %
+                    "(uid=%(varname)s) or (sAMAccountName=%(varname)s) "
+                    "[for active directory LDAP]") %
                   {'varname': '%s'})
 
     auth_ldap_anon_bind_uid = forms.CharField(
@@ -262,6 +353,9 @@ class LDAPSettingsForm(SiteSettingsForm):
 
         if not can_enable_ldap:
             self.disabled_fields['auth_ldap_uri'] = True
+            self.disabled_fields['auth_ldap_given_name_attribute'] = True
+            self.disabled_fields['auth_ldap_surname_attribute'] = True
+            self.disabled_fields['auth_ldap_full_name_attribute'] = True
             self.disabled_fields['auth_ldap_email_domain'] = True
             self.disabled_fields['auth_ldap_email_attribute'] = True
             self.disabled_fields['auth_ldap_tls'] = True

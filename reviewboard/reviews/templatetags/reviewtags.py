@@ -1,9 +1,13 @@
+import logging
+
 from django import template
 from django.conf import settings
 from django.db.models import Q
 from django.template import NodeList, TemplateSyntaxError
+from django.template.defaultfilters import stringfilter
 from django.template.loader import render_to_string
 from django.utils import simplejson
+from django.utils.html import escape
 from django.utils.translation import ugettext_lazy as _
 from djblets.util.decorators import basictag, blocktag
 from djblets.util.misc import get_object_or_none
@@ -11,8 +15,9 @@ from djblets.util.templatetags.djblets_utils import humanize_list
 
 from reviewboard.accounts.models import Profile
 from reviewboard.diffviewer.models import DiffSet
-from reviewboard.reviews.models import Comment, Group, ReviewRequest, \
-                                       ScreenshotComment
+from reviewboard.reviews.models import BaseComment, Comment, Group, \
+                                       ReviewRequest, ScreenshotComment, \
+                                       FileAttachmentComment
 
 
 register = template.Library()
@@ -96,17 +101,18 @@ def commentcounts(context, filediff, interfilediff=None):
     Each entry in the array has a dictionary containing the following keys:
 
       =========== ==================================================
-      Key         Description
+      Key                Description
       =========== ==================================================
-      comment_id  The ID of the comment
-      text        The text of the comment
-      line        The first line number
-      num_lines   The number of lines this comment spans
-      user        A dictionary containing "username" and "name" keys
-                  for the user
-      url         The URL to the comment
-      localdraft  True if this is the current user's draft comment
-      =========== ==================================================
+      comment_id         The ID of the comment
+      text               The text of the comment
+      line               The first line number
+      num_lines          The number of lines this comment spans
+      user               A dictionary containing "username" and "name" keys
+                         for the user
+      url                The URL to the comment
+      localdraft         True if this is the current user's draft comment
+      review_id          The ID of the review this comment is associated with
+      ==============================================================
     """
     comment_dict = {}
     user = context.get('user', None)
@@ -126,7 +132,7 @@ def commentcounts(context, filediff, interfilediff=None):
 
             comment_dict.setdefault(key, []).append({
                 'comment_id': comment.id,
-                'text': comment.text,
+                'text': escape(comment.text),
                 'line': comment.first_line,
                 'num_lines': comment.num_lines,
                 'user': {
@@ -137,6 +143,11 @@ def commentcounts(context, filediff, interfilediff=None):
                 'url': comment.get_review_url(),
                 'localdraft': review.user == user and \
                               not review.public,
+                'review_id': review.id,
+                'review_request_id': review.review_request.id,
+                'issue_opened': comment.issue_opened,
+                'issue_status': BaseComment
+                                .issue_status_to_string(comment.issue_status),
             })
 
     comments_array = []
@@ -162,16 +173,19 @@ def screenshotcommentcounts(context, screenshot):
 
     Each entry in the array has a dictionary containing the following keys:
 
-      =========== ==================================================
-      Key         Description
-      =========== ==================================================
-      text        The text of the comment
-      localdraft  True if this is the current user's draft comment
-      x           The X location of the comment's region
-      y           The Y location of the comment's region
-      w           The width of the comment's region
-      h           The height of the comment's region
-      =========== ==================================================
+      ================== ====================================================
+      Key                Description
+      ================== ====================================================
+      text               The text of the comment
+      localdraft         True if this is the current user's draft comment
+      x                  The X location of the comment's region
+      y                  The Y location of the comment's region
+      w                  The width of the comment's region
+      h                  The height of the comment's region
+      review_id          The ID of the review this comment is associated with
+      review_request_id  The ID of the review request this comment is
+                         associated with
+      ================== ====================================================
     """
     comments = {}
     user = context.get('user', None)
@@ -184,19 +198,55 @@ def screenshotcommentcounts(context, screenshot):
                                         comment.x, comment.y)
 
             comments.setdefault(position, []).append({
-                'id': comment.id,
-                'text': comment.text,
+                'comment_id': comment.id,
+                'text': escape(comment.text),
                 'user': {
                     'username': review.user.username,
                     'name': review.user.get_full_name() or review.user.username,
                 },
                 'url': comment.get_review_url(),
-                'localdraft' : review.user == user and \
-                               not review.public,
-                'x' : comment.x,
-                'y' : comment.y,
-                'w' : comment.w,
-                'h' : comment.h,
+                'localdraft': review.user == user and not review.public,
+                'x': comment.x,
+                'y': comment.y,
+                'w': comment.w,
+                'h': comment.h,
+                'review_id': review.id,
+                'review_request_id': review.review_request.id,
+                'issue_opened': comment.issue_opened,
+                'issue_status': BaseComment
+                                .issue_status_to_string(comment
+                                                        .issue_status),
+            })
+
+    return simplejson.dumps(comments)
+
+
+@register.tag
+@basictag(takes_context=True)
+def file_attachment_comments(context, file_attachment):
+    """Returns a JSON array of current comments for a file attachment."""
+    comments = []
+    user = context.get('user', None)
+
+    for comment in file_attachment.comments.all():
+        review = get_object_or_none(comment.review)
+
+        if review and (review.public or review.user == user):
+            comments.append({
+                'comment_id': comment.id,
+                'text': escape(comment.text),
+                'user': {
+                    'username': review.user.username,
+                    'name': review.user.get_full_name() or review.user.username,
+                },
+                'url': comment.get_review_url(),
+                'localdraft': review.user == user and not review.public,
+                'review_id': review.id,
+                'review_request_id': review.review_request.id,
+                'issue_opened': comment.issue_opened,
+                'issue_status': BaseComment
+                                .issue_status_to_string(comment
+                                                        .issue_status),
             })
 
     return simplejson.dumps(comments)
@@ -212,8 +262,9 @@ def reply_list(context, review, comment, context_type, context_id):
     to display replies to a type of object. In each case, the replies will
     be rendered using the template :template:`reviews/review_reply.html`.
 
-    If ``context_type`` is ``"comment"`` or ``"screenshot_comment"``,
-    the generated list of replies are to ``comment``.
+    If ``context_type`` is ``"comment"``, ``"screenshot_comment"``
+    or ``"file_attachment_comment"``, the generated list of replies are to
+    ``comment``.
 
     If ``context_type`` is ``"body_top"`` or ```"body_bottom"``,
     the generated list of replies are to ``review``. Depending on the
@@ -224,7 +275,8 @@ def reply_list(context, review, comment, context_type, context_id):
     the JavaScript code for storing and categorizing the comments.
     """
     def generate_reply_html(reply, timestamp, text):
-        return render_to_string('reviews/review_reply.html', {
+        new_context = context
+        new_context.update({
             'context_id': context_id,
             'id': reply.id,
             'review': review,
@@ -233,6 +285,7 @@ def reply_list(context, review, comment, context_type, context_id):
             'reply_user': reply.user,
             'draft': not reply.public
         })
+        return render_to_string('reviews/review_reply.html', new_context)
 
     def process_body_replies(queryset, attrname, user):
         if user.is_anonymous():
@@ -253,7 +306,8 @@ def reply_list(context, review, comment, context_type, context_id):
 
     s = ""
 
-    if context_type == "comment" or context_type == "screenshot_comment":
+    if context_type in ('comment', 'screenshot_comment',
+                        'file_attachment_comment'):
         for reply_comment in comment.public_replies(user):
             s += generate_reply_html(reply_comment.review.get(),
                                      reply_comment.timestamp,
@@ -291,6 +345,9 @@ def reply_section(context, review, comment, context_type, context_id):
     if comment != "":
         if type(comment) is ScreenshotComment:
             context_id += 's'
+        elif type(comment) is FileAttachmentComment:
+            context_id += 'f'
+
         context_id += str(comment.id)
 
     return {
@@ -298,12 +355,13 @@ def reply_section(context, review, comment, context_type, context_id):
         'comment': comment,
         'context_type': context_type,
         'context_id': context_id,
-        'user': context.get('user', None)
+        'user': context.get('user', None),
+        'local_site_name': context.get('local_site_name'),
     }
 
 
 @register.inclusion_tag('reviews/dashboard_entry.html', takes_context=True)
-def dashboard_entry(context, level, text, view, group_name=None):
+def dashboard_entry(context, level, text, view, param=None):
     """
     Renders an entry in the dashboard sidebar.
 
@@ -316,8 +374,11 @@ def dashboard_entry(context, level, text, view, group_name=None):
     starred = False
     show_count = True
     count = 0
+    url = None
+    group_name = None
 
     if view == 'to-group':
+        group_name = param
         count = datagrid.counts['groups'].get(group_name,
             datagrid.counts['starred_groups'].get(group_name, 0))
     elif view == 'watched-groups':
@@ -328,6 +389,9 @@ def dashboard_entry(context, level, text, view, group_name=None):
 
         if view == 'starred':
             starred = True
+    elif view == "url":
+        url = param
+        show_count = False
     else:
         raise template.TemplateSyntaxError, \
             "Invalid view type '%s' passed to 'dashboard_entry' tag." % view
@@ -339,13 +403,15 @@ def dashboard_entry(context, level, text, view, group_name=None):
         'text': text,
         'view': view,
         'group_name': group_name,
+        'url': url,
         'count': count,
         'show_count': show_count,
         'user': user,
         'starred': starred,
         'selected': context.get('view', None) == view and \
                     (not group_name or
-                     context.get('group', None) == group._ame),
+                     context.get('group', None) == group_name),
+        'local_site_name': context.get('local_site_name'),
     }
 
 
@@ -368,9 +434,15 @@ def bug_url(bug_id, review_request):
     If the repository the review request belongs to doesn't have an
     associated bug tracker, this returns None.
     """
-    if (review_request.repository.bug_tracker and
+    if (review_request.repository and
+        review_request.repository.bug_tracker and
         '%s' in review_request.repository.bug_tracker):
-        return review_request.repository.bug_tracker % bug_id
+        try:
+            return review_request.repository.bug_tracker % bug_id
+        except TypeError:
+            logging.error("Error creating bug URL. The bug tracker URL '%s' "
+                          "is likely invalid." %
+                          review_request.repository.bug_tracker)
 
     return None
 
@@ -525,3 +597,44 @@ def render_star(user, obj):
         'user': user,
         'MEDIA_URL': settings.MEDIA_URL,
     })
+
+
+@register.inclusion_tag('reviews/comment_issue.html',
+                        takes_context=True)
+def comment_issue(context, review_request, comment, comment_type):
+    """
+    Renders the code responsible for handling comment issue statuses.
+    """
+
+    issue_status = BaseComment.issue_status_to_string(comment.issue_status)
+    user = context.get('user', None)
+    interactive = 'false'
+
+    if user and user.is_authenticated() and \
+        user == review_request.submitter:
+        interactive = 'true'
+
+    return {
+        'comment': comment,
+        'comment_type': comment_type,
+        'issue_status': issue_status,
+        'review': comment.review.get(),
+        'interactive': interactive,
+    }
+
+@register.filter
+@stringfilter
+def pretty_print_issue_status(status):
+    """Turns an issue status code into a human-readable status string."""
+    return BaseComment.issue_status_to_string(status)
+
+@register.filter
+@stringfilter
+def char_limit(description):
+    """Limit the length of an issue description if it exceeds 120 chars."""
+    limit = 120
+
+    if len(description) > limit:
+        description = description[0:limit-3] + "..."
+
+    return description

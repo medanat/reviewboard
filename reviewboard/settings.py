@@ -3,6 +3,8 @@
 import os
 import sys
 
+from django.conf import settings
+
 # Can't import django.utils.translation yet
 _ = lambda s: s
 
@@ -16,8 +18,8 @@ ADMINS = (
 MANAGERS = ADMINS
 
 # Local time zone for this installation. All choices can be found here:
-# http://www.postgresql.org/docs/current/static/datetime-keywords.html#DATETIME-TIMEZONE-SET-TABLE
-TIME_ZONE = 'US/Pacific'
+# http://www.postgresql.org/docs/8.1/static/datetime-keywords.html#DATETIME-TIMEZONE-SET-TABLE
+TIME_ZONE = 'UTC'
 
 # Language code for this installation. All choices can be found here:
 # http://www.w3.org/TR/REC-html40/struct/dirlang.html#langcodes
@@ -27,6 +29,9 @@ LANGUAGE_CODE = 'en-us'
 # This should match the ID of the Site object in the database.  This is used to
 # figure out URLs to stick in e-mails and related pages.
 SITE_ID = 1
+
+# The prefix for e-mail subjects sent to administrators.
+EMAIL_SUBJECT_PREFIX = "[Review Board] "
 
 # If you set this to False, Django will make some optimizations so as not
 # to load the internationalization machinery.
@@ -39,6 +44,7 @@ LANGUAGES = (
 TEMPLATE_LOADERS = (
     'django.template.loaders.filesystem.Loader',
     'django.template.loaders.app_directories.Loader',
+    'djblets.extensions.loaders.load_template_source',
 )
 
 MIDDLEWARE_CLASSES = (
@@ -54,9 +60,11 @@ MIDDLEWARE_CLASSES = (
     'djblets.siteconfig.middleware.SettingsMiddleware',
     'reviewboard.admin.middleware.LoadSettingsMiddleware',
 
+    'djblets.extensions.middleware.ExtensionsMiddleware',
     'djblets.log.middleware.LoggingMiddleware',
     'reviewboard.admin.middleware.CheckUpdatesRequiredMiddleware',
     'reviewboard.admin.middleware.X509AuthMiddleware',
+    'reviewboard.site.middleware.LocalSiteMiddleware',
 )
 
 TEMPLATE_CONTEXT_PROCESSORS = (
@@ -70,7 +78,9 @@ TEMPLATE_CONTEXT_PROCESSORS = (
     'djblets.util.context_processors.siteRoot',
     'djblets.util.context_processors.ajaxSerial',
     'djblets.util.context_processors.mediaSerial',
+    'reviewboard.accounts.context_processors.auth_backends',
     'reviewboard.admin.context_processors.version',
+    'reviewboard.site.context_processors.localsite',
 )
 
 SITE_ROOT_URLCONF = 'reviewboard.urls'
@@ -86,7 +96,7 @@ TEMPLATE_DIRS = (
     os.path.join(REVIEWBOARD_ROOT, 'templates'),
 )
 
-INSTALLED_APPS = (
+RB_BUILTIN_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -94,24 +104,28 @@ INSTALLED_APPS = (
     'django.contrib.sites',
     'django.contrib.sessions',
     'djblets.datagrid',
+    'djblets.extensions',
     'djblets.feedview',
+    'djblets.gravatars',
     'djblets.log',
+    'djblets.pipeline',
     'djblets.siteconfig',
     'djblets.util',
     'djblets.webapi',
+    'pipeline', # Must be after djblets.pipeline
     'reviewboard.accounts',
     'reviewboard.admin',
+    'reviewboard.attachments',
     'reviewboard.changedescs',
     'reviewboard.diffviewer',
-    'reviewboard.iphone',
+    'reviewboard.extensions',
     'reviewboard.notifications',
-    'reviewboard.reports',
     'reviewboard.reviews',
     'reviewboard.scmtools',
     'reviewboard.site',
     'reviewboard.webapi',
-    'django_evolution', # Must be last
-)
+]
+RB_EXTRA_APPS = []
 
 WEB_API_ENCODERS = (
     'djblets.webapi.encoders.ResourceAPIEncoder',
@@ -128,7 +142,7 @@ CACHE_EXPIRATION_TIME = 60 * 60 * 24 * 30 # 1 month
 # Custom test runner, which uses nose to find tests and execute them.  This
 # gives us a somewhat more comprehensive test execution than django's built-in
 # runner, as well as some special features like a code coverage report.
-TEST_RUNNER = 'reviewboard.test.runner'
+TEST_RUNNER = 'reviewboard.test.RBTestRunner'
 
 # Dependency checker functionality.  Gives our users nice errors when they start
 # out, instead of encountering them later on.  Most of the magic for this
@@ -146,14 +160,18 @@ if os.path.split(os.path.dirname(__file__))[1] != 'reviewboard':
     dependency_error('The directory containing manage.py must be named "reviewboard"')
 
 LOCAL_ROOT = None
+PRODUCTION = True
 
 # Load local settings.  This can override anything in here, but at the very
 # least it needs to define database connectivity.
 try:
     import settings_local
     from settings_local import *
-except ImportError:
-    dependency_error('Unable to read settings_local.py.')
+except ImportError, exc:
+    dependency_error('Unable to import settings_local.py: %s' % exc)
+
+
+INSTALLED_APPS = RB_BUILTIN_APPS + RB_EXTRA_APPS + ['django_evolution']
 
 TEMPLATE_DEBUG = DEBUG
 
@@ -164,12 +182,15 @@ if not LOCAL_ROOT:
         # reviewboard/ is in the same directory as settings_local.py.
         # This is probably a Git checkout.
         LOCAL_ROOT = os.path.join(local_dir, 'reviewboard')
+        PRODUCTION = False
     else:
         # This is likely a site install. Get the parent directory.
         LOCAL_ROOT = os.path.dirname(local_dir)
 
 HTDOCS_ROOT = os.path.join(LOCAL_ROOT, 'htdocs')
 MEDIA_ROOT = os.path.join(HTDOCS_ROOT, 'media')
+STATIC_ROOT = MEDIA_ROOT
+EXTENSIONS_MEDIA_ROOT = os.path.join(MEDIA_ROOT, 'ext')
 
 
 # URL prefix for media -- CSS, JavaScript and images. Make sure to use a
@@ -177,6 +198,7 @@ MEDIA_ROOT = os.path.join(HTDOCS_ROOT, 'media')
 #
 # Examples: "http://foo.com/media/", "/media/".
 MEDIA_URL = getattr(settings_local, 'MEDIA_URL', SITE_ROOT + 'media/')
+STATIC_URL = MEDIA_URL
 
 
 # Base these on the user's SITE_ROOT.
@@ -191,3 +213,94 @@ SESSION_COOKIE_PATH = SITE_ROOT
 
 # The list of directories that will be searched to generate a media serial.
 MEDIA_SERIAL_DIRS = ["admin", "djblets", "rb"]
+
+# Media compression
+PIPELINE_JS = {
+    'common': {
+        'source_filenames': (
+            'rb/js/jquery.form.js',
+            'rb/js/datastore.js',
+            'rb/js/ui.autocomplete.js',
+            'rb/js/common.js',
+        ),
+        'output_filename': 'rb/js/base.?.min.js',
+    },
+    'reviews': {
+        'source_filenames': (
+            'rb/js/diffviewer.js',
+            'rb/js/reviews.js',
+            'rb/js/screenshots.js',
+        ),
+        'output_filename': 'rb/js/reviews.?.min.js',
+    },
+    'admin': {
+        'source_filenames': (
+            'rb/js/flot/jquery.flot.min.js',
+            'rb/js/flot/jquery.flot.pie.min.js',
+            'rb/js/flot/jquery.flot.selection.min.js',
+            'rb/js/jquery.masonry.js',
+            'rb/js/admin.js',
+        ),
+        'output_filename': 'rb/js/admin.?.min.js',
+    },
+    'repositoryform': {
+        'source_filenames': (
+            'rb/js/repositoryform.js',
+        ),
+        'output_filename': 'rb/js/repositoryform.?.min.js',
+    },
+}
+
+PIPELINE_CSS = {
+    'common': {
+        'source_filenames': (
+            'rb/css/common.less',
+            'rb/css/dashboard.less',
+            'rb/css/search.less',
+        ),
+        'output_filename': 'rb/css/common.?.min.css',
+        'absolute_asset_paths': False,
+    },
+    'reviews': {
+        'source_filenames': (
+            'rb/css/diffviewer.less',
+            'rb/css/reviews.less',
+            'rb/css/syntax.css',
+        ),
+        'output_filename': 'rb/css/reviews.?.min.css',
+        'absolute_asset_paths': False,
+    },
+    'admin': {
+        'source_filenames': (
+            'rb/css/admin.less',
+            'rb/css/admin-dashboard.less',
+        ),
+        'output_filename': 'rb/css/admin.?.min.css',
+        'absolute_asset_paths': False,
+    },
+}
+
+BLESS_IMPORT_PATHS = ('rb/css/',)
+PIPELINE_CSS_COMPRESSOR = None
+PIPELINE_JS_COMPRESSOR = 'pipeline.compressors.jsmin.JSMinCompressor'
+PIPELINE_AUTO = False
+
+# On production (site-installed) builds, we always want to use the pre-compiled
+# versions. We want this regardless of the DEBUG setting (since they may
+# turn DEBUG on in order to get better error output).
+#
+# On a build running out of a source tree, for testing purposes, we want to
+# use the raw .less and JavaScript files when DEBUG is set. When DEBUG is
+# turned off in a non-production build, though, we want to be able to play
+# with the built output, so treat it like a production install.
+if PRODUCTION or not DEBUG:
+    PIPELINE_COMPILERS = ['djblets.pipeline.compilers.bless.BlessCompiler']
+    PIPELINE = True
+    PIPELINE_VERSION = True
+elif DEBUG:
+    PIPELINE_COMPILERS = []
+    PIPELINE = False
+    PIPELINE_VERSION = False
+
+# Packages to unit test
+TEST_PACKAGES = ['reviewboard']

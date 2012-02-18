@@ -15,15 +15,15 @@ from reviewboard.scmtools.errors import ChangeNumberInUseError
 class DefaultReviewerManager(Manager):
     """A manager for DefaultReviewer models."""
 
-    def for_repository(self, repository):
+    def for_repository(self, repository, local_site):
         """Returns all DefaultReviewers that represent a repository.
 
         These include both DefaultReviewers that have no repositories
         (for backwards-compatibility) and DefaultReviewers that are
         associated with the given repository.
         """
-        return self.filter(Q(repository__isnull=True) |
-                           Q(repository=repository))
+        return self.filter(local_site=local_site).filter(
+            Q(repository__isnull=True) | Q(repository=repository))
 
 
 class ReviewGroupManager(Manager):
@@ -105,7 +105,8 @@ class ReviewRequestManager(ConcurrencyManager):
             status='P',
             public=False,
             repository=repository,
-            diffset_history=diffset_history)
+            diffset_history=diffset_history,
+            local_site=local_site)
 
         if changenum:
             review_request.update_from_changenum(changenum)
@@ -121,18 +122,20 @@ class ReviewRequestManager(ConcurrencyManager):
             db = router.db_for_write(ReviewRequest)
             cursor = connections[db].cursor()
             cursor.execute(
-                'UPDATE %(table)s'
-                '  SET local_id = COALESCE('
-                '          (SELECT MAX(local_id)'
-                '               FROM %(table)s'
-                '               WHERE local_site_id = %(local_site_id)s) + 1,'
-                '          1),'
-                '      local_site_id = %(local_site_id)s'
-                '  WHERE %(table)s.id = %(id)s' % {
+                'UPDATE %(table)s SET'
+                '  local_id = COALESCE('
+                '    (SELECT MAX(local_id) from'
+                '      (SELECT local_id FROM %(table)s'
+                '        WHERE local_site_id = %(local_site_id)s) as x'
+                '      ) + 1,'
+                '    1),'
+                '  local_site_id = %(local_site_id)s'
+                '    WHERE %(table)s.id = %(id)s' % {
                     'table': ReviewRequest._meta.db_table,
                     'local_site_id': local_site.pk,
                     'id': review_request.pk,
-                })
+            })
+
             review_request = ReviewRequest.objects.get(pk=review_request.pk)
 
         return review_request
@@ -331,7 +334,8 @@ class ReviewManager(ConcurrencyManager):
                 if (review_value and not getattr(master_review, attname)):
                     setattr(master_review, attname, review_value)
 
-            for attname in ["comments", "screenshot_comments"]:
+            for attname in ["comments", "screenshot_comments",
+                            "file_attachment_comments"]:
                 master_m2m = getattr(master_review, attname)
                 review_m2m = getattr(review, attname)
 

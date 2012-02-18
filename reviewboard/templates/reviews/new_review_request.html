@@ -3,11 +3,6 @@
 {% load i18n %}
 {% block title %}{% trans "New Review Request" %}{% endblock %}
 
-{% block css %}
-<link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}rb/css/diffviewer.css?{{MEDIA_SERIAL}}" />
-<link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}rb/css/reviews.css?{{MEDIA_SERIAL}}" />
-{% endblock %}
-
 {% block scripts-post %}
 <script type="text/javascript">
     var visible = {{fields|safe}};
@@ -41,9 +36,9 @@
 </p>
 <p>
 {% blocktrans %}
- post-review is a command line tool that will help create compatible
- diffs, create new review requests, and update them, effortlessly. It
- is compatible with Windows, Linux, MacOS X, and Solaris.
+ post-review is a command line tool that will help create compatible diffs,
+ create new review requests, and update them, effortlessly. It is compatible
+ with Windows, Linux, MacOS X, and other unix-like operating systems.
 {% endblocktrans %}
 </p>
 {% endbox %}

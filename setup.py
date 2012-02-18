@@ -6,14 +6,17 @@
 # MacOS X and data files installation.
 
 import os
+import subprocess
 import sys
 
 from ez_setup import use_setuptools
 use_setuptools()
 
 from setuptools import setup, find_packages
+from setuptools.command.egg_info import egg_info
 from distutils.command.install_data import install_data
 from distutils.command.install import INSTALL_SCHEMES
+from distutils.core import Command
 
 from reviewboard import get_package_version, is_release, VERSION
 
@@ -48,10 +51,46 @@ class osx_install_data(install_data):
         install_data.finalize_options(self)
 
 
+class BuildEggInfo(egg_info):
+    def run(self):
+        # Conditionally build the media files if there's a settings_local
+        # file. If there isn't one, we assume this is a new dev tree, in which
+        # prepare-dev hasn't been run yet.
+        #
+        # This is necessary since setup.py develop must be run before
+        # prepare-dev.py, but develop will call egg_info.
+        if os.path.exists('settings_local.py'):
+            self.run_command('build_media')
+
+        egg_info.run(self)
+
+
+class BuildMedia(Command):
+    user_options = []
+
+    def initialize_options(self):
+        pass
+
+    def finalize_options(self):
+        pass
+
+    def run(self):
+        retcode = subprocess.call(['./reviewboard/manage.py', 'synccompress',
+                                   '--force'])
+
+        if retcode != 0:
+            raise RuntimeError('Failed to build media files')
+
+
+cmdclasses = {
+    'install_data': install_data,
+    'egg_info': BuildEggInfo,
+    'build_media': BuildMedia,
+}
+
+
 if sys.platform == "darwin":
-    cmdclasses = {'install_data': osx_install_data}
-else:
-    cmdclasses = {'install_data': install_data}
+    cmdclasses['install_data'] = osx_install_data
 
 
 PACKAGE_NAME = 'ReviewBoard'
@@ -78,6 +117,7 @@ setup(name=PACKAGE_NAME,
       entry_points = {
           'console_scripts': [
               'rb-site = reviewboard.cmdline.rbsite:main',
+              'rbssh = reviewboard.cmdline.rbssh:main',
           ],
           'reviewboard.scmtools': [
               'bzr = reviewboard.scmtools.bzr:BZRTool',
@@ -86,6 +126,7 @@ setup(name=PACKAGE_NAME,
               'git = reviewboard.scmtools.git:GitTool',
               'hg = reviewboard.scmtools.hg:HgTool',
               'perforce = reviewboard.scmtools.perforce:PerforceTool',
+              'plastic = reviewboard.scmtools.plastic:PlasticTool',
               'svn = reviewboard.scmtools.svn:SVNTool',
           ],
           'reviewboard.auth_backends': [
@@ -97,16 +138,18 @@ setup(name=PACKAGE_NAME,
       },
       cmdclass=cmdclasses,
       install_requires=[
-          'Django>=1.2.3',
-          'django_evolution>=0.6.2',
-          'Djblets>=0.6.5',
-          'Pygments>=1.3.1',
+          'Django>=1.3.1',
+          'django_evolution>=0.6.5',
+          'Djblets>=0.7alpha0.dev',
+          'django-pipeline==1.1.27',
+          'Pygments>=1.4',
           'flup',
-          'paramiko',
-          'python-dateutil',
+          'paramiko>=1.7.6',
+          'python-dateutil==1.5',
           'python-memcached',
           'pytz',
-          'recaptcha_client',
+          'recaptcha-client',
+          'requests>=0.10.1',
       ],
       dependency_links = [
           "http://downloads.reviewboard.org/mirror/",

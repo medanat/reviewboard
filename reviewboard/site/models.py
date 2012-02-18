@@ -44,9 +44,9 @@ class LocalSite(models.Model):
     """
     name = models.SlugField(_('name'), max_length=32, blank=False, unique=True)
     users = models.ManyToManyField(User, blank=True,
-                                   related_name='localsite')
+                                   related_name='local_site')
     admins = models.ManyToManyField(User, blank=True,
-                                   related_name='localsite_admins')
+                                   related_name='local_site_admins')
 
     def is_accessible_by(self, user):
         """Returns whether or not the user has access to this LocalSite.
@@ -55,7 +55,19 @@ class LocalSite(models.Model):
         'users' field.
         """
         return (user.is_authenticated() and
-                self.users.filter(pk=user.pk).exists())
+                (user.is_staff or self.users.filter(pk=user.pk).exists()))
+
+    def is_mutable_by(self, user, perm='site.change_localsite'):
+        """Returns whether or not a user can modify settings in a LocalSite.
+
+        This checks that the user is either staff with the proper permissions,
+        or that they're listed in the 'admins' field.
+
+        By default, this is checking whether the LocalSite itself can be
+        modified, but a different permission can be passed to check for
+        another object.
+        """
+        return user.has_perm(perm) or self.admins.filter(pk=user.pk).exists()
 
     def __unicode__(self):
         return self.name

@@ -154,12 +154,14 @@ class Site(object):
         self.db_port = None
         self.db_user = None
         self.db_pass = None
+        self.reenter_db_pass = None
         self.cache_type = None
         self.cache_info = None
         self.web_server_type = None
         self.python_loader = None
         self.admin_user = None
         self.admin_password = None
+        self.reenter_admin_password = None
 
     def rebuild_site_directory(self):
         """
@@ -184,6 +186,7 @@ class Site(object):
         #       directories.
         self.mkdir(os.path.join(media_dir, "uploaded"))
         self.mkdir(os.path.join(media_dir, "uploaded", "images"))
+        self.mkdir(os.path.join(media_dir, "ext"))
 
         self.link_pkg_dir("reviewboard",
                           "htdocs/errordocs",
@@ -306,7 +309,7 @@ class Site(object):
 
         fp.write("DATABASES = {\n")
         fp.write("    'default': {\n")
-        fp.write("        'ENGINE': '%s',\n" % db_engine)
+        fp.write("        'ENGINE': 'django.db.backends.%s',\n" % db_engine)
         fp.write("        'NAME': '%s',\n" % self.db_name.replace("\\", "\\\\"))
 
         if self.db_type != "sqlite3":
@@ -358,7 +361,7 @@ class Site(object):
             import settings_local
 
             return hasattr(settings_local, 'DATABASE_ENGINE')
-        except ImportError, e:
+        except ImportError:
             sys.stderr.write("Unable to import settings_local. "
                              "Cannot determine if upgrade is needed.\n")
             return False
@@ -388,7 +391,7 @@ class Site(object):
                     if key != 'ENGINE':
                         database_info[key] = getattr(settings_local,
                                                      'DATABASE_%s' % key, '')
-        except ImportError, e:
+        except ImportError:
             sys.stderr.write("Unable to import settings_local for upgrade.\n")
             return
 
@@ -440,7 +443,6 @@ class Site(object):
 
         try:
             from django.core.management import execute_manager, get_commands
-            from reviewboard.admin.migration import fix_django_evolution_issues
             import reviewboard.settings
 
             if not params:
@@ -448,8 +450,6 @@ class Site(object):
 
             if DEBUG:
                 params.append("--verbosity=0")
-
-            fix_django_evolution_issues(reviewboard.settings)
 
             commands_dir = os.path.join(self.abs_install_dir, 'commands')
 
@@ -527,6 +527,7 @@ class Site(object):
             'sitedomain_escaped': domain_name_escaped,
             'siteid': self.site_id,
             'siteroot': self.site_root,
+            'siteroot_noslash': self.site_root[1:-1],
         }
 
         template = re.sub("@([a-z_]+)@", lambda m: data.get(m.group(1)),
@@ -566,45 +567,49 @@ class UIToolkit(object):
         """
         Prompts the user for some text. This may contain a default value.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     def prompt_choice(self, page, prompt, choices,
                       save_obj=None, save_var=None):
         """
         Prompts the user for an item amongst a list of choices.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     def text(self, page, text):
         """
         Displays a block of text to the user.
         """
-        raise NotImplemented
+        raise NotImplementedError
+
+    def disclaimer(self, page, text):
+        """Displays a block of disclaimer text to the user."""
+        raise NotImplementedError
 
     def urllink(self, page, url):
         """
         Displays a URL to the user.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     def itemized_list(self, page, title, items):
         """
         Displays an itemized list.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     def step(self, page, text, func):
         """
         Adds a step of a multi-step operation. This will indicate when
         it's starting and when it's complete.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
     def error(self, text, done_func=None):
         """
         Displays a block of error text to the user.
         """
-        raise NotImplemented
+        raise NotImplementedError
 
 
 class ConsoleUI(UIToolkit):
@@ -705,14 +710,18 @@ class ConsoleUI(UIToolkit):
         i = 0
 
         for choice in choices:
+            description = ''
+            enabled = True
+
             if isinstance(choice, basestring):
                 text = choice
-                enabled = True
-            else:
+            elif len(choice) == 2:
                 text, enabled = choice
+            else:
+                text, description, enabled = choice
 
             if enabled:
-                self.text(page, "(%d) %s\n" % (i + 1, text),
+                self.text(page, "(%d) %s %s\n" % (i + 1, text, description),
                           leading_newline=(i == 0))
                 valid_choices.append(text)
                 i += 1
@@ -752,6 +761,9 @@ class ConsoleUI(UIToolkit):
             print
 
         print self.text_wrapper.fill(text)
+
+    def disclaimer(self, page, text):
+        self.text(page, 'NOTE: %s' % text)
 
     def urllink(self, page, url):
         """
@@ -1006,6 +1018,8 @@ class GtkUI(UIToolkit):
 
         if password:
             entry.set_visibility(False)
+            if not save_var.startswith('reenter'):
+                page['validators'].append(lambda: self.confirm_reentry(site, save_var))
 
         if default:
             entry.set_text(default)
@@ -1021,14 +1035,20 @@ class GtkUI(UIToolkit):
         if len(page['entries']) == 1:
             page['on_show_funcs'].append(entry.grab_focus)
 
+    def confirm_reentry(self, obj, var):
+        pw = getattr(obj, var)
+        repw = getattr(obj, 'reenter_' + var)
+        return pw == repw
+
     def prompt_choice(self, page, prompt, choices,
                       save_obj=None, save_var=None):
         """
         Prompts the user for an item amongst a list of choices.
         """
-        def on_toggled(radio_button):
+
+        def on_toggled(radio_button, data):
             if radio_button.get_active():
-                setattr(save_obj, save_var, radio_button.get_label())
+                setattr(save_obj, save_var, data)
 
         hbox = gtk.HBox(False, 0)
         hbox.show()
@@ -1050,26 +1070,40 @@ class GtkUI(UIToolkit):
         label.set_use_markup(True)
 
         buttons = []
+        first_enabled = 0
 
         for choice in choices:
+            description = ''
+            enabled = True
+
             if isinstance(choice, basestring):
                 text = choice
-                enabled = True
-            else:
+            elif len(choice) == 2:
                 text, enabled = choice
+            else:
+                text, description, enabled = choice
 
-            radio_button = gtk.RadioButton(label=text, use_underline=False)
+            if not (enabled or first_enabled):
+                first_enabled += 1
+
+            radio_button = gtk.RadioButton(label='%s %s' % (text, description),
+                                           use_underline=False)
             radio_button.show()
             vbox.pack_start(radio_button, False, True, 0)
             buttons.append(radio_button)
             radio_button.set_sensitive(enabled)
-            radio_button.connect('toggled', on_toggled)
+            radio_button.connect('toggled', on_toggled, text)
 
-            if buttons[0] != radio_button:
-                radio_button.set_group(buttons[0])
+        # Set the first enabled button chosen if there is any
+        if first_enabled >= len(buttons):
+            raise RuntimeWarning('There is no valid choice')
 
-        # Force this to save.
-        on_toggled(buttons[0])
+        # Force 'toggled' signal to set default value
+        buttons[first_enabled].toggled()
+
+        for button in buttons:
+            if button != buttons[first_enabled]:
+                button.set_group(buttons[first_enabled])
 
     def text(self, page, text):
         """
@@ -1078,6 +1112,23 @@ class GtkUI(UIToolkit):
         label = gtk.Label(textwrap.fill(text, 80))
         label.show()
         page['widget'].pack_start(label, False, True, 0)
+        label.set_alignment(0, 0)
+
+    def disclaimer(self, page, text):
+        """Displays a block of disclaimer text to the user, with an icon."""
+        hbox = gtk.HBox(False, 6)
+        hbox.show()
+        page['widget'].pack_start(hbox, False, True, 0)
+
+        icon = gtk.image_new_from_icon_name(gtk.STOCK_DIALOG_WARNING,
+                                            gtk.ICON_SIZE_MENU)
+        icon.show()
+        hbox.pack_start(icon, False, False, 0)
+        icon.set_alignment(0, 0)
+
+        label = gtk.Label(textwrap.fill(text, 80))
+        label.show()
+        hbox.pack_start(label, True, True, 0)
         label.set_alignment(0, 0)
 
     def urllink(self, page, url):
@@ -1371,7 +1422,9 @@ class InstallCommand(Command):
         ui.prompt_choice(page, "Database Type",
                          [("mysql", Dependencies.get_support_mysql()),
                           ("postgresql", Dependencies.get_support_postgresql()),
-                          ("sqlite3", Dependencies.get_support_sqlite())],
+                          ("sqlite3",
+                           "(not supported for production use)",
+                           Dependencies.get_support_sqlite())],
                          save_obj=site, save_var="db_type")
 
     def ask_database_name(self):
@@ -1397,8 +1450,10 @@ class InstallCommand(Command):
         page = ui.page("What database name should Review Board use?",
                        is_visible_func=lambda: site.db_type != "sqlite3")
 
-        ui.text(page, "You may need to create this database and grant a "
-                      "user modification rights before continuing.")
+        ui.disclaimer(page, "You need to create this database and grant "
+                            "user modification rights before continuing. "
+                            "See your database documentation for more "
+                            "information.")
 
         ui.prompt_input(page, "Database Name", site.db_name,
                         save_obj=site, save_var="db_name")
@@ -1425,13 +1480,16 @@ class InstallCommand(Command):
         page = ui.page("What is the login and password for this database?",
                        is_visible_func=lambda: site.db_type != "sqlite3")
 
-        ui.text(page, "This must be a user that has creation and modification "
-                      "rights on the database.")
+        ui.text(page, "This must be a user that has table creation and "
+                      "modification rights on the database you already "
+                      "specified.")
 
         ui.prompt_input(page, "Database Username", site.db_user,
                         save_obj=site, save_var="db_user")
         ui.prompt_input(page, "Database Password", site.db_pass, password=True,
                         save_obj=site, save_var="db_pass")
+        ui.prompt_input(page, "Confirm Database Password", site.db_pass, password=True,
+                        save_obj=site, save_var="reenter_db_pass")
 
     def ask_cache_type(self):
         page = ui.page("What cache mechanism should be used?")
@@ -1440,7 +1498,8 @@ class InstallCommand(Command):
                       "you have a good reason not to.")
 
         ui.prompt_choice(page, "Cache Type",
-                         [("memcached", Dependencies.get_support_memcached()),
+                         [("memcached", "(recommended)",
+                           Dependencies.get_support_memcached()),
                           "file"],
                          save_obj=site, save_var="cache_type")
 
@@ -1476,9 +1535,14 @@ class InstallCommand(Command):
                        is_visible_func=lambda: site.web_server_type == "apache")
 
         ui.text(page, "Based on our experiences, we recommend using "
-                      "modpython with Review Board.")
+                      "wsgi with Review Board.")
 
-        ui.prompt_choice(page, "Python Loader", ["modpython", "fastcgi", "wsgi"],
+        ui.prompt_choice(page, "Python Loader",
+                         [
+                          ("wsgi", "(recommended)", True),
+                          "fastcgi",
+                          ("modpython", "(no longer supported)", True),
+                         ],
                          save_obj=site, save_var="python_loader")
 
     def ask_admin_user(self):
@@ -1498,6 +1562,8 @@ class InstallCommand(Command):
                         save_obj=site, save_var="admin_user")
         ui.prompt_input(page, "Password", site.admin_password, password=True,
                         save_obj=site, save_var="admin_password")
+        ui.prompt_input(page, "Confirm Password", site.admin_password, password=True,
+                        save_obj=site, save_var="reenter_admin_password")
         ui.prompt_input(page, "E-Mail Address", site.admin_email,
                         save_obj=site, save_var="admin_email")
 
@@ -1528,6 +1594,7 @@ class InstallCommand(Command):
 
         ui.itemized_list(page, None, [
             os.path.join(site.abs_install_dir, 'htdocs', 'media', 'uploaded'),
+            os.path.join(site.abs_install_dir, 'htdocs', 'media', 'ext'),
             os.path.join(site.abs_install_dir, 'data'),
         ])
 
@@ -1589,6 +1656,9 @@ class UpgradeCommand(Command):
             print "Updating database. This may take a while."
             site.sync_database()
             site.migrate_database()
+
+            print "Resetting in-database caches."
+            site.run_manage_command("fixreviewcounts")
 
         print "Upgrade complete."
 

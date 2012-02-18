@@ -9,15 +9,12 @@
 {% endblock %}
 
 {% block css %}
-<link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}rb/css/dashboard.css?{{MEDIA_SERIAL}}" />
+{{block.super}}
 <link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}djblets/css/datagrid.css?{{MEDIA_SERIAL}}" />
 {% endblock %}
 
 {% block scripts-post %}
-<script type="text/javascript" src="{{MEDIA_URL}}djblets/js/jquery-ui-1.6rc5.min.js"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}djblets/js/jquery.gravy.js?{{MEDIA_SERIAL}}"></script>
 <script type="text/javascript" src="{{MEDIA_URL}}djblets/js/datagrid.js?{{MEDIA_SERIAL}}"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}rb/js/common.js?{{MEDIA_SERIAL}}"></script>
 {% endblock %}
 
 {% block content %}
@@ -43,6 +40,14 @@
 {%  endfor %}
 {% endif %}
 {% dashboard_entry "main-item" "All My Requests" "mine" %}
+{% for hook in sidebar_hooks %}
+{%  for main_entry in hook.entries %}
+{%   dashboard_entry "main-item" main_entry.label "url" main_entry.url %}
+{%   for sub_entry in main_entry.subitems %}
+{%    dashboard_entry "sub-item" sub_entry.label "url" sub_entry.url %}
+{%   endfor %}
+{%  endfor %}
+{% endfor %}
   </tbody>
  </table>
  <div id="dashboard-main" class="clearfix">

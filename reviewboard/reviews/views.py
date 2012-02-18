@@ -8,8 +8,7 @@ from django.contrib.sites.models import Site
 from django.core.urlresolvers import reverse
 from django.db.models import Q
 from django.http import HttpResponse, HttpResponseRedirect, Http404, \
-                        HttpResponseNotModified, HttpResponseServerError, \
-                        HttpResponseForbidden
+                        HttpResponseNotModified, HttpResponseServerError
 from django.shortcuts import get_object_or_404, get_list_or_404, \
                              render_to_response
 from django.template.context import RequestContext
@@ -30,12 +29,15 @@ from djblets.util.misc import get_object_or_none
 
 from reviewboard.accounts.decorators import check_login_required, \
                                             valid_prefs_required
-from reviewboard.accounts.models import ReviewRequestVisit
+from reviewboard.accounts.models import ReviewRequestVisit, Profile
+from reviewboard.attachments.forms import UploadFileForm, CommentFileForm
 from reviewboard.changedescs.models import ChangeDescription
 from reviewboard.diffviewer.diffutils import get_file_chunks_in_range
 from reviewboard.diffviewer.models import DiffSet
 from reviewboard.diffviewer.views import view_diff, view_diff_fragment, \
                                          exception_traceback_string
+from reviewboard.extensions.hooks import DashboardHook, \
+                                         ReviewRequestDetailHook
 from reviewboard.reviews.datagrids import DashboardDataGrid, \
                                           GroupDataGrid, \
                                           ReviewRequestDataGrid, \
@@ -45,12 +47,14 @@ from reviewboard.reviews.errors import OwnershipError
 from reviewboard.reviews.forms import NewReviewRequestForm, \
                                       UploadDiffForm, \
                                       UploadScreenshotForm
-from reviewboard.reviews.models import Comment, ReviewRequest, \
-                                       ReviewRequestDraft, Review, Group, \
-                                       Screenshot, ScreenshotComment
+from reviewboard.reviews.models import BaseComment, Comment, \
+                                       ReviewRequest, \
+                                       Review, Group, Screenshot, \
+                                       ScreenshotComment
 from reviewboard.scmtools.core import PRE_CREATION
 from reviewboard.scmtools.errors import SCMError
 from reviewboard.site.models import LocalSite
+from reviewboard.webapi.encoder import status_to_string
 
 
 #####
@@ -80,6 +84,9 @@ def _find_review_request(request, review_request_id, local_site_name):
     """
     if local_site_name:
         local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return None, _render_permission_denied(request)
+
         review_request = get_object_or_404(ReviewRequest,
                                            local_site=local_site,
                                            local_id=review_request_id)
@@ -112,6 +119,8 @@ def _make_review_request_context(review_request, extra_context):
         'review_request': review_request,
         'upload_diff_form': upload_diff_form,
         'upload_screenshot_form': UploadScreenshotForm(),
+        'file_attachment_form': UploadFileForm(),
+        'comment_file_form': CommentFileForm(),
         'scmtool': scmtool,
     }, **extra_context)
 
@@ -208,6 +217,8 @@ fields_changed_name_map = {
     'target_people': 'Reviewers (People)',
     'screenshots': 'Screenshots',
     'screenshot_captions': 'Screenshot Captions',
+    'files': 'Uploaded Files',
+    'file_captions': 'Uploaded File Captions',
     'diff': 'Diff',
 }
 
@@ -227,10 +238,8 @@ def new_review_request(request,
     """
     if local_site_name:
         local_site = get_object_or_404(LocalSite, name=local_site_name)
-
-        if (request.user.is_anonymous() or
-            not local_site.users.filter(pk=request.user.pk).exists()):
-            return _render_permission_denied(requset)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
     else:
         local_site = None
 
@@ -258,7 +267,6 @@ def new_review_request(request,
 
 
 @check_login_required
-@valid_prefs_required
 def review_detail(request,
                   review_request_id,
                   local_site_name=None,
@@ -293,8 +301,9 @@ def review_detail(request,
             visited.timestamp = datetime.now()
             visited.save()
 
-        starred = review_request in \
-                  request.user.get_profile().starred_review_requests.all()
+        profile, profile_is_new = \
+            Profile.objects.get_or_create(user=request.user)
+        starred = review_request in profile.starred_review_requests.all()
 
         # Unlike review above, this covers replies as well.
         try:
@@ -305,7 +314,6 @@ def review_detail(request,
             review_timestamp = last_draft_review.timestamp
         except Review.DoesNotExist:
             pass
-
 
     draft = review_request.get_draft(request.user)
 
@@ -326,9 +334,10 @@ def review_detail(request,
         return HttpResponseNotModified()
 
     changedescs = review_request.changedescs.filter(public=True)
+    latest_changedesc = None
 
     try:
-        latest_changedesc = changedescs.latest('timestamp')
+        latest_changedesc = changedescs.latest()
         latest_timestamp = latest_changedesc.timestamp
     except ChangeDescription.DoesNotExist:
         latest_timestamp = None
@@ -346,13 +355,14 @@ def review_detail(request,
             state = 'collapsed'
 
         try:
-            latest_reply = temp_review.public_replies().latest('timestamp').timestamp
+            latest_reply = \
+                temp_review.public_replies().latest('timestamp').timestamp
         except Review.DoesNotExist:
             latest_reply = None
 
         # Mark as expanded if there is a reply newer than last_visited
-        if latest_reply and last_visited < latest_reply:
-          state = ''
+        if latest_reply and last_visited and last_visited < latest_reply:
+            state = ''
 
         entries.append({
             'review': temp_review,
@@ -372,6 +382,7 @@ def review_detail(request,
                 # We don't hard-code URLs in the bug info, since the
                 # tracker may move, but we can do it here.
                 if (name == "bugs_closed" and
+                    review_request.repository and
                     review_request.repository.bug_tracker):
                     bug_url = review_request.repository.bug_tracker
                     for field in info:
@@ -393,8 +404,19 @@ def review_detail(request,
 
                     if 'new' in info:
                         info['new'][0] = mark_safe(info['new'][0])
+
+                # Make status human readable.
+                if name == 'status':
+                    if 'old' in info:
+                        info['old'][0] = status_to_string(info['old'][0])
+
+                    if 'new' in info:
+                        info['new'][0] = status_to_string(info['new'][0])
+
             elif name == "screenshot_captions":
                 change_type = 'screenshot_captions'
+            elif name == "file_captions":
+                change_type = 'file_captions'
             else:
                 # No clue what this is. Bail.
                 continue
@@ -422,16 +444,42 @@ def review_detail(request,
 
     entries.sort(key=lambda item: item['timestamp'])
 
+    close_description = ''
+
+    if latest_changedesc and 'status' in latest_changedesc.fields_changed:
+        status = latest_changedesc.fields_changed['status']['new'][0]
+
+        if status in (ReviewRequest.DISCARDED, ReviewRequest.SUBMITTED):
+            close_description = latest_changedesc.text
+
+    issues = {
+        'total': 0,
+        'open': 0,
+        'resolved': 0,
+        'dropped': 0
+    }
+
+    for entry in entries:
+        if 'review' in entry:
+            for comment in entry['review'].get_all_comments(issue_opened=True):
+                issues['total'] += 1
+                issues[BaseComment.issue_status_to_string(
+                        comment.issue_status)] += 1
+
     response = render_to_response(
         template_name,
         RequestContext(request, _make_review_request_context(review_request, {
             'draft': draft,
+            'detail_hooks': ReviewRequestDetailHook.hooks,
             'review_request_details': draft or review_request,
             'entries': entries,
             'last_activity_time': last_activity_time,
             'review': review,
             'request': request,
+            'latest_changedesc': latest_changedesc,
+            'close_description': close_description,
             'PRE_CREATION': PRE_CREATION,
+            'issues': issues,
         })))
     set_etag(response, etag)
 
@@ -471,9 +519,12 @@ def all_review_requests(request,
     """
     Displays a list of all review requests.
     """
-    local_site = get_object_or_none(LocalSite, name=local_site_name)
-    if local_site_name and not local_site:
-        raise Http404
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
     datagrid = ReviewRequestDataGrid(request,
         ReviewRequest.objects.public(request.user,
                                      status=None,
@@ -491,8 +542,13 @@ def submitter_list(request,
     """
     Displays a list of all users.
     """
-    grid = SubmitterDataGrid(
-        request, local_site=get_object_or_none(LocalSite, name=local_site_name))
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
+    grid = SubmitterDataGrid(request, local_site=local_site)
     return grid.render_to_response(template_name)
 
 
@@ -503,8 +559,13 @@ def group_list(request,
     """
     Displays a list of all review groups.
     """
-    grid = GroupDataGrid(
-        request, local_site=get_object_or_none(LocalSite, name=local_site_name))
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
+    grid = GroupDataGrid(request, local_site=local_site)
     return grid.render_to_response(template_name)
 
 
@@ -529,7 +590,12 @@ def dashboard(request,
     """
     view = request.GET.get('view', None)
 
-    local_site = get_object_or_none(LocalSite, name=local_site_name)
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
 
     if view == "watched-groups":
         # This is special. We want to return a list of groups, not
@@ -538,10 +604,9 @@ def dashboard(request,
     else:
         grid = DashboardDataGrid(request, local_site=local_site)
 
-    user = request.user
-    profile = user.get_profile()
-
-    return grid.render_to_response(template_name)
+    return grid.render_to_response(template_name, extra_context={
+        'sidebar_hooks': DashboardHook.hooks,
+    })
 
 
 @check_login_required
@@ -553,7 +618,12 @@ def group(request,
     A list of review requests belonging to a particular group.
     """
     # Make sure the group exists
-    local_site = get_object_or_none(LocalSite, name=local_site_name)
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
     group = get_object_or_404(Group, name=name, local_site=local_site)
 
     if not group.is_accessible_by(request.user):
@@ -576,10 +646,17 @@ def group_members(request,
     """
     A list of users registered for a particular group.
     """
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
+
     # Make sure the group exists
     group = get_object_or_404(Group,
                               name=name,
-                              local_site__name=local_site_name)
+                              local_site=local_site)
 
     if not group.is_accessible_by(request.user):
         return _render_permission_denied(
@@ -595,21 +672,26 @@ def group_members(request,
 @check_login_required
 def submitter(request,
               username,
-              template_name='reviews/datagrid.html',
+              template_name='reviews/user_page.html',
               local_site_name=None):
     """
     A list of review requests owned by a particular user.
     """
-    local_site = get_object_or_none(LocalSite, name=local_site_name)
-    if local_site_name and not local_site:
-        raise Http404
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+    else:
+        local_site = None
 
     # Make sure the user exists
     if local_site:
-        if not local_site.users.filter(username=username).exists():
+        try:
+            user = local_site.users.get(username=username)
+        except User.DoesNotExist:
             raise Http404
     else:
-        get_object_or_404(User, username=username)
+        user = get_object_or_404(User, username=username)
 
     datagrid = ReviewRequestDataGrid(request,
         ReviewRequest.objects.from_user(username, status=None,
@@ -618,7 +700,10 @@ def submitter(request,
         _("%s's review requests") % username,
         local_site=local_site)
 
-    return datagrid.render_to_response(template_name)
+    return datagrid.render_to_response(template_name, extra_context={
+        'show_profile': user.is_profile_visible(request.user),
+        'viewing_user': user,
+    })
 
 
 @check_login_required
@@ -815,6 +900,7 @@ def preview_review_request_email(
     format,
     text_template_name='notifications/review_request_email.txt',
     html_template_name='notifications/review_request_email.html',
+    changedesc_id=None,
     local_site_name=None):
     """
     Previews the e-mail message that would be sent for an initial
@@ -828,6 +914,13 @@ def preview_review_request_email(
     if not review_request:
         return response
 
+    extra_context = {}
+
+    if changedesc_id:
+        changedesc = get_object_or_404(ChangeDescription, pk=changedesc_id)
+        extra_context['change_text'] = changedesc.text
+        extra_context['changes'] = changedesc.fields_changed
+
     siteconfig = SiteConfiguration.objects.get_current()
 
     if format == 'text':
@@ -840,12 +933,12 @@ def preview_review_request_email(
         raise Http404
 
     return HttpResponse(render_to_string(template_name,
-        RequestContext(request, {
+        RequestContext(request, dict({
             'review_request': review_request,
             'user': request.user,
             'domain': Site.objects.get_current().domain,
             'domain_method': siteconfig.get("site_domain_method"),
-        }),
+        }, **extra_context)),
     ), mimetype=mimetype)
 
 
@@ -1016,6 +1109,11 @@ def search(request,
         # FIXME: I'm not super thrilled with this
         return HttpResponseRedirect(reverse("root"))
 
+    if query.isdigit():
+        query_review_request = get_object_or_none(ReviewRequest, pk=query)
+        if query_review_request:
+            return HttpResponseRedirect(query_review_request.get_absolute_url())
+
     import lucene
     lv = [int(x) for x in lucene.VERSION.split('.')]
     lucene_is_2x = lv[0] == 2 and lv[1] < 9
@@ -1051,7 +1149,6 @@ def search(request,
         result_ids = [searcher.doc(hit.doc).get('id') \
                       for hit in searcher.search(parser.parse(query), 100).scoreDocs]
 
-
     searcher.close()
 
     results = ReviewRequest.objects.filter(id__in=result_ids,
@@ -1064,3 +1161,40 @@ def search(request,
                        extra_context={'query': query,
                                       'extra_query': 'q=%s' % query,
                                      })
+
+
+@check_login_required
+def user_infobox(request, username,
+                 template_name='accounts/user_infobox.html',
+                 local_site_name=None):
+    """Displays a user info popup.
+
+    This is meant to be embedded in other pages, rather than being
+    a standalone page.
+    """
+    user = get_object_or_404(User, username=username)
+
+    if local_site_name:
+        local_site = get_object_or_404(LocalSite, name=local_site_name)
+
+        if not local_site.is_accessible_by(request.user):
+            return _render_permission_denied(request)
+
+    show_profile = user.is_profile_visible(request.user)
+
+    etag = ':'.join([user.first_name.encode('ascii', 'replace'),
+                     user.last_name.encode('ascii', 'replace'),
+                     user.email.encode('ascii', 'replace'),
+                     str(user.last_login), str(settings.AJAX_SERIAL),
+                     str(show_profile)])
+
+    if etag_if_none_match(request, etag):
+        return HttpResponseNotModified()
+
+    response = render_to_response(template_name, RequestContext(request, {
+        'show_profile': show_profile,
+        'requested_user': user,
+    }))
+    set_etag(response, etag)
+
+    return response

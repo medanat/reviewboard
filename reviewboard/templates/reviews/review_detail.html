@@ -1,33 +1,26 @@
 {% extends "reviews/reviewable_base.html" %}
 {% load i18n %}
 {% load djblets_deco %}
+{% load djblets_extensions %}
 {% load djblets_utils %}
+{% load rb_extensions %}
 {% load reviewtags %}
 
 {% block title %}{{review_request_details.summary}} | {% trans "Review Request" %}{% endblock %}
 
 {% block jsconsts %}
+{{block.super}}
 {%  include "reviews/review_flags.js" %}
 {% endblock %}
 
 {% block css %}
-<link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}rb/css/diffviewer.css?{{MEDIA_SERIAL}}" />
-<link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}rb/css/reviews.css?{{MEDIA_SERIAL}}" />
-<link rel="stylesheet" type="text/css" href="{{MEDIA_URL}}rb/css/syntax.css?{{MEDIA_SERIAL}}" />
+{{block.super}}
+
 {% if siteconfig.settings.diffviewer_show_trailing_whitespace|default_if_none:1 %}
 <style type="text/css">
   .ew { background: #ee3434; }
 </style>
 {% endif %}
-{% endblock %}
-
-{% block scripts-post %}
-<script type="text/javascript" src="{{MEDIA_URL}}djblets/js/jquery-ui-1.6rc5.min.js"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}djblets/js/jquery.gravy.js?{{MEDIA_SERIAL}}"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}rb/js/ui.autocomplete.min.js?{{MEDIA_SERIAL}}"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}rb/js/common.js?{{MEDIA_SERIAL}}"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}rb/js/reviews.js?{{MEDIA_SERIAL}}"></script>
-<script type="text/javascript" src="{{MEDIA_URL}}rb/js/jquery.form.js?{{MEDIA_SERIAL}}"></script>
 {% endblock %}
 
 {% block content %}
@@ -36,7 +29,9 @@
 
 {% box "review-request" %}
 
-<ul id="actions">
+<ul class="actions">
+{% review_request_action_hooks %}
+{% review_request_dropdown_action_hooks %}
 {% include "reviews/review_request_actions_secondary.html" %}
 {% if review_request_details.diffset or review_request.diffset_history.diffsets.count %}
  <li class="primary"><a href="diff/raw/">{% trans "Download Diff" %}</a></li>
@@ -51,16 +46,72 @@
 {% include "reviews/review_request_box.html" %}
 
 <ul class="controls">
+{% if entries %}
  <li>
-  <img width="14" height="14" border="0" alt="" src="/media/rb/images/expand.png">
-  <a href="#" id="expand-all">{% trans "Expand All" %}</a>
+  <a href="#" id="expand-all">
+   <img width="14" height="14" border="0" alt="" src="{{MEDIA_URL}}rb/images/expand.png?{{MEDIA_SERIAL}}">
+   <span>{% trans "Expand All" %}</span>
+  </a>
  </li>
+ <li>
+  <a href="#" id="collapse-all">
+   <img width="14" height="14" border="0" alt="" src="{{MEDIA_URL}}rb/images/collapse.png?{{MEDIA_SERIAL}}">
+   <span>{% trans "Collapse All" %}</span>
+  </a>
+ </li>
+{% endif %}
 </ul>
 
 </div>
 {% endbox %}
 
-
+{% if issues.total > 0 %}
+{% box "collapsed" %}
+<div class="main">
+ <div class="header">
+  <div class="collapse-button"></div>
+  <div class="issue-summary">{% trans "Issue Summary" %}:</div>
+  <div class="counters">
+   <strong>
+    <div class="counter">{% trans "Total" %}:</div>
+    <div id="total-counter">{{issues.total}}</div>
+   </strong>
+   <div class="counter">{% trans "Open" %}:</div>
+   <div id="open-counter">{{issues.open}}</div>
+   <div class="counter">{% trans "Resolved" %}:</div>
+   <div id="resolved-counter">{{issues.resolved}}</div>
+   <div class="counter">{% trans "Dropped" %}:</div>
+   <div id="dropped-counter">{{issues.dropped}}</div>
+  </div>
+  <div class="clearfix"></div>
+ </div>
+ <div class="body">
+  <div class="issue-table-wrapper">
+   <table class="issue-table">
+    <tr>
+     <th>{% trans "Description" %}</th>
+     <th>{% trans "From" %}</th>
+     <th>{% trans "Status" %}</th>
+    </tr>
+{% for entry in entries %}
+{%  if entry.review %}
+{%   for comment in entry.review.get_all_comments %}
+{%    if comment.issue_opened %}
+    <tr id="summary-table-entry-{{comment.id}}" class="issue {{comment.issue_status|pretty_print_issue_status}}">
+     <td class="summary-table-description"><a class="summary-anchor" href="#{{comment.id}}">{{comment}}</a></td>
+     <td class="reviewer"><a href="{% url user entry.review.user %}" class="user">{{entry.review.user|user_displayname}}</a></td>
+     <td class="status">{{comment.issue_status|pretty_print_issue_status|capfirst}}</td>
+    </tr>
+{%    endif %}
+{%   endfor %}
+{%  endif %}
+{% endfor %}
+   </table>
+  </div>
+ </div>
+</div>
+{% endbox %}
+{% endif %}
 
 {% for entry in entries %}
 {%  if entry.review %}
@@ -74,31 +125,82 @@
 <div class="main">
  <div class="banners"></div>
  <div class="header">
+  {% template_hook_point "review-summary-header-pre" %}
   {% if entry.review.ship_it %}<div class="shipit">{% trans "Ship it!" %}</div>{% endif %}
   <div class="collapse-button"></div>
-  <div class="reviewer"><a href="{% url user entry.review.user %}">{{entry.review.user|user_displayname}}</a></div>
+  <div class="reviewer"><a href="{% url user entry.review.user %}" class="user">{{entry.review.user|user_displayname}}</a></div>
   <div class="posted_time">{% blocktrans with entry.review.timestamp|timesince as timestamp_since  and entry.review.timestamp|date:"F jS, Y, P" as timestamp_date %}Posted {{ timestamp_since }} ago ({{ timestamp_date }}){% endblocktrans %}</div>
+  {% template_hook_point "review-summary-header-post" %}
  </div>
  <div class="body">
    <pre class="body_top reviewtext">{{entry.review.body_top|escape}}</pre>
    {% reply_section entry.review "" "body_top" "rcbt" %}
-{% if entry.review.comments.all or entry.review.screenshot_comments.all %}
+{% if entry.review.comments.all or entry.review.screenshot_comments.all or entry.review.file_attachment_comments.all %}
    <dl class="diff-comments">
+
 {% for comment in entry.review.screenshot_comments.all %}
     <dt>
      <a name="scomment{{comment.id}}"></a>
      <div class="screenshot">
       <span class="filename">
-       <a href="{{comment.screenshot.get_absolute_url}}">{% if comment.screenshot.caption %}{{comment.screenshot.caption}}{% else %}{{comment.screenshot.image.name|basename}}{% endif %}</a>
+       <a href="{{comment.screenshot.get_absolute_url}}">{% spaceless %}
+{% if draft and comment.screenshot.draft_caption %}
+{{comment.screenshot.draft_caption}}
+{% else %}
+{{comment.screenshot.caption|default_if_none:comment.screenshot.image.name|basename}}
+{% endif %}
+{% endspaceless %}</a>
       </span>
       {{comment.image|safe}}
      </div>
     </dt>
     <dd>
+{% if comment.issue_opened %}
+     <a name="{{comment.id}}">
+{% endif %}
      <pre>{{comment.text|escape}}</pre>
+{% if comment.issue_opened %}
+     <div id="comment-{{comment.id}}-issue" class="issue-indicator">
+       {% comment_issue review_request_details comment "screenshot_comment" %}
+     </div>
+{% endif %}
      {% reply_section entry.review comment "screenshot_comment" "rc" %}
     </dd>
 {% endfor %}
+
+{% for comment in entry.review.file_attachment_comments.all %}
+    <dt>
+     <a name="fcomment{{comment.id}}"></a>
+     <div class="file-attachment">
+      <a href="{{comment.file_attachment.get_absolute_url}}">{% spaceless %}
+       <img src="{{comment.file_attachment.icon_url}}" />
+       <span class="filename">{{comment.file_attachment.filename}}</span>
+      </a>
+{% if draft and comment.file_attachment.draft_caption %}
+      <p class="caption">{{comment.file_attachment.draft_caption}}</p>
+{% else %}
+{%  if comment.file_attachment.caption %}
+      <p class="caption">{{comment.file_attachment.caption}}</p>
+{%  endif %}
+{% endif %}
+{% endspaceless %}</a>
+      </span>
+     </div>
+    </dt>
+    <dd>
+{% if comment.issue_opened %}
+     <a name="{{comment.id}}">
+{% endif %}
+     <pre>{{comment.text|escape}}</pre>
+{% if comment.issue_opened %}
+     <div id="comment-{{comment.id}}-issue" class="issue-indicator">
+       {% comment_issue review_request_details comment "file_attachment_comment" %}
+     </div>
+{% endif %}
+     {% reply_section entry.review comment "file_attachment_comment" "rc" %}
+    </dd>
+{% endfor %}
+
 {% for comment in entry.review.ordered_comments %}
     <dt>
      <a name="comment{{comment.id}}"></a>
@@ -128,7 +230,15 @@
      </div>
     </dt>
     <dd>
+{% if comment.issue_opened %}
+     <a name="{{comment.id}}">
+{% endif %}
      <pre class="reviewtext">{{comment.text|escape}}</pre>
+{% if comment.issue_opened %}
+     <div id="comment-{{comment.id}}-issue" class="issue-indicator">
+       {% comment_issue review_request_details comment "comment" %}
+     </div>
+{% endif %}
      {% reply_section entry.review comment "comment" "rc" %}
     </dd>
     <script type="text/javascript">

@@ -1,3 +1,4 @@
+from __future__ import with_statement
 import fnmatch
 import os
 import re
@@ -20,6 +21,7 @@ from django.utils.translation import ugettext as _
 
 from djblets.log import log_timed
 from djblets.siteconfig.models import SiteConfiguration
+from djblets.util.contextmanagers import controlled_subprocess
 from djblets.util.misc import cache_memoize
 
 from reviewboard.accounts.models import Profile
@@ -215,15 +217,17 @@ def patch(diff, file, filename):
 
     diff = convert_line_endings(diff)
 
-    # XXX: catch exception if Popen fails?
     newfile = '%s-new' % oldfile
-    p = subprocess.Popen(['patch', '-o', newfile, oldfile],
-                         stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT)
-    p.stdin.write(diff)
-    p.stdin.close()
-    patch_output = p.stdout.read()
-    failure = p.wait()
+
+    process = subprocess.Popen(['patch', '-o', newfile, oldfile],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT)
+
+    with controlled_subprocess("patch", process) as p:
+        p.stdin.write(diff)
+        p.stdin.close()
+        patch_output = p.stdout.read()
+        failure = p.wait()
 
     if failure:
         f = open("%s.diff" %
@@ -349,8 +353,8 @@ def get_original_file(filediff):
         file = filediff.source_file
         revision = filediff.source_revision
 
-        key = "%s:%s:%s" % (filediff.diffset.repository.path, urlquote(file),
-                            revision)
+        key = "%s:%s:%s" % (urlquote(filediff.diffset.repository.path),
+                            urlquote(file), urlquote(revision))
 
         # We wrap the result of get_file in a list and then return the first
         # element after getting the result from the cache. This prevents the
@@ -467,14 +471,17 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
         if not possible_functions:
             raise StopIteration
 
-        if is_modified_file:
-            last_index = last_header_index[1]
-            i1 = lines[start][4]
-            i2 = lines[end - 1][4]
-        else:
-            last_index = last_header_index[0]
-            i1 = lines[start][1]
-            i2 = lines[end - 1][1]
+        try:
+            if is_modified_file:
+                last_index = last_header_index[1]
+                i1 = lines[start][4]
+                i2 = lines[end - 1][4]
+            else:
+                last_index = last_header_index[0]
+                i1 = lines[start][1]
+                i2 = lines[end - 1][1]
+        except IndexError:
+            raise StopIteration
 
         for i in xrange(last_index, len(possible_functions)):
             linenum, line = possible_functions[i]
@@ -598,7 +605,7 @@ def get_chunks(diffset, filediff, interfilediff, force_interdiff,
             #       once instead of twice.
             markup_a = apply_pygments(old or '', source_file)
             markup_b = apply_pygments(new or '', dest_file)
-        except ValueError:
+        except:
             pass
 
     if not markup_a:
@@ -1028,8 +1035,13 @@ def get_diff_files(diffset, filediff=None, interdiffset=None,
             basepath = ""
             basename = filediff.source_file
 
+        tool = filediff.diffset.repository.get_scmtool()
+        depot_filename = tool.normalize_path_for_display(filediff.source_file)
+        dest_filename = tool.normalize_path_for_display(filediff.dest_file)
+
         file = {
-            'depot_filename': filediff.source_file,
+            'depot_filename': depot_filename,
+            'dest_filename': dest_filename or depot_filename,
             'basename': basename,
             'basepath': basepath,
             'revision': source_revision,

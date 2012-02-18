@@ -1,11 +1,16 @@
+
 // State variables
+var gCommentDlg = null;
+var gEditCount = 0;
 var gPublishing = false;
 var gPendingSaveCount = 0;
 var gPendingDiffFragments = {};
 var gReviewBanner = $("#review-banner");
 var gDraftBanner = $("#draft-banner");
 var gDraftBannerButtons = $("input", gDraftBanner);
+var gFileAttachmentComments = {};
 var gReviewRequest = new RB.ReviewRequest(gReviewRequestId,
+                                          gReviewRequestSitePrefix,
                                           gReviewRequestPath);
 
 
@@ -30,14 +35,120 @@ var gEditorCompleteHandlers = {
         );
     },
     'target_people': function(data) {
-        return urlizeList(data,
-            function(item) { return item.url; },
-            function(item) { return item.username; }
-        );
+        return $(urlizeList(data,
+                            function(item) { return item.url; },
+                            function(item) { return item.username; }))
+            .addClass("user")
+            .user_infobox();
     },
     'description': linkifyText,
     'testing_done': linkifyText
 };
+
+
+/*
+ * gCommentIssueManager takes care of setting the state of a particular
+ * comment issue, and also takes care of notifying callbacks whenever
+ * the state is successfully changed.
+ */
+var gCommentIssueManager = new function() {
+    var callbacks = {};
+    var comments = {};
+
+    /*
+     * setCommentState - set the state of comment issue
+     * @param review_id the id for the review that the comment belongs to
+     * @param comment_id the id of the comment with the issue
+     * @param comment_type the type of comment, either "comment" or
+     *                     "screenshot_comment"
+     * @param state the state to set the comment issue to - either
+     *              "open", "resolved", or "dropped"
+     */
+    this.setCommentState = function(review_id, comment_id,
+                                    comment_type, state) {
+        var comment = getComment(review_id, comment_id, comment_type);
+        requestState(comment, state);
+    };
+
+    /*
+     * registerCallback - allows clients to register callbacks to be
+     * notified when a particular comment state is updated.
+     * @param comment_id the id of the comment to be notified about
+     * @param callback a function of the form:
+     *                 function(issue_state) {}
+     */
+    this.registerCallback = function(comment_id, callback) {
+        if (!callbacks[comment_id]) {
+            callbacks[comment_id] = [];
+        }
+
+        callbacks[comment_id].push(callback);
+    };
+
+    /*
+     * A helper function to either generate the appropriate
+     * comment object based on comment_type, or to grab the
+     * comment from a cache if it's been generated before.
+     */
+    function getComment(review_id, comment_id, comment_type) {
+        if (comments[comment_id]) {
+            return comments[comment_id];
+        }
+
+        var comment = null;
+
+        if (comment_type == "comment") {
+            comment = gReviewRequest
+                .createReview(review_id)
+                .createDiffComment(comment_id);
+        } else if (comment_type == "screenshot_comment") {
+            comment = gReviewRequest
+                .createReview(review_id)
+                .createScreenshotComment(comment_id);
+        } else if (comment_type == "file_attachment_comment") {
+            comment = gReviewRequest
+                .createReview(review_id)
+                .createFileAttachmentComment(comment_id);
+        }
+
+        comments[comment_id] = comment;
+        return comment;
+    }
+
+    // Helper function to set the state of a comment
+    function requestState(comment, state) {
+        comment.ready(function() {
+	    var old_issue_status = comment.issue_status;
+            comment.issue_status = state;
+            comment.save({
+                success: function(rsp) {
+                    notifyCallbacks(comment.id, comment.issue_status,
+				    old_issue_status);
+
+                    /*
+                     * We don't want the current user to receive the
+                     * notification that the review request has been
+                     * updated, since they themselves updated the
+                     * issue status.
+                     */
+                    if (rsp.last_activity_time) {
+                        registerForUpdates(rsp.last_activity_time);
+                    }
+                }
+            });
+        });
+    }
+
+    /*
+     * Helper function that notifies all callbacks registered for
+     * a particular comment
+     */
+    function notifyCallbacks(comment_id, issue_status, old_issue_status) {
+        for (var i = 0; i < callbacks[comment_id].length; i++) {
+            callbacks[comment_id][i](issue_status, old_issue_status);
+        }
+    }
+}();
 
 
 /*
@@ -46,15 +157,17 @@ var gEditorCompleteHandlers = {
  * By default, this will use the item as the URL and as the hyperlink text.
  * By overriding urlFunc and textFunc, the URL and text can be customized.
  *
- * @param {array}    list     The list of items.
- * @param {function} urlFunc  A function to return the URL for an item in
- *                            the list.
- * @param {function} textFunc A function to return the text for an item in
- *                            the list.
+ * @param {array}    list            The list of items.
+ * @param {function} urlFunc         A function to return the URL for an item
+ *                                   in the list.
+ * @param {function} textFunc        A function to return the text for an item
+ *                                   in the list.
+ * @param {function} postProcessFunc Post-process generated elements in the
+                                     list.
  *
  * @return A string containing the HTML markup for the list of hyperlinks.
  */
-function urlizeList(list, urlFunc, textFunc) {
+function urlizeList(list, urlFunc, textFunc, postProcessFunc) {
     var str = "";
 
     for (var i = 0; i < list.length; i++) {
@@ -87,7 +200,7 @@ function linkifyText(text) {
 
     /* Linkify all URLs. */
     text = text.replace(
-        /\b([a-z]+:\/\/[-A-Za-z0-9+&@#\/%?=~_()|!:,.;]*([-A-Za-z0-9+@#\/%=~_();|]|))/g,
+        /\b([a-z]+:\/\/[\-A-Za-z0-9+&@#\/%?=~_()|!:,.;]*([\-A-Za-z0-9+@#\/%=~_();|]|))/g,
         function(url) {
             /*
              * We might catch an entity at the end of the URL. This is hard
@@ -98,7 +211,7 @@ function linkifyText(text) {
              * See bug 1069.
              */
             var extra = "";
-            var parts = url.match(/^(.*)(&[a-z]+;)$/);
+            var parts = url.match(/^(.*)(&[a-z]+;|\))$/);
 
             if (parts != null) {
                 /* We caught an entity. Set it free. */
@@ -106,20 +219,20 @@ function linkifyText(text) {
                 extra = parts[2];
             }
 
-            return '<a href="' + url + '">' + url + '</a>' + extra;
+            return '<a target="_blank" href="' + url + '">' + url + '</a>' + extra;
         });
 
 
     /* Linkify /r/#/ review request numbers */
     text = text.replace(
-        /(^|\s|&lt;)\/(r\/\d+(\/[-A-Za-z0-9+&@#\/%?=~_()|!:,.;]*[-A-Za-z0-9+&@#\/%=~_()|])?)/g,
-        '$1<a href="' + SITE_ROOT + '$2">/$2</a>');
+        /(^|\s|&lt;)\/(r\/\d+(\/[\-A-Za-z0-9+&@#\/%?=~_()|!:,.;]*[\-A-Za-z0-9+&@#\/%=~_()|])?)/g,
+        '$1<a target="_blank" href="' + SITE_ROOT + '$2">/$2</a>');
 
     /* Bug numbers */
     if (gBugTrackerURL != "") {
         text = text.replace(/\b(bug|issue) (#[^.\s]+|#?\d+)/gi,
             function(m1, m2, m3) {
-                return '<a href="' + gBugTrackerURL.replace("%s", m3) +
+                return '<a target="_blank" href="' + gBugTrackerURL.replace("%s", m3) +
                        '">' + m1 + '</a>';
             });
     }
@@ -144,7 +257,7 @@ function setDraftField(field, value) {
         buttons: gDraftBannerButtons,
         success: function(rsp) {
             /* Checking if invalid user or group was entered. */
-            if (rsp["invalid_" + field] && rsp["invalid_" + field].length) {
+            if (rsp.stat == "fail" && rsp.fields) {
 
                 $('#review-request-warning')
                     .delay(6000)
@@ -153,19 +266,19 @@ function setDraftField(field, value) {
                 });
 
                 /* Wrap each term in quotes or a leading 'and'. */
-                $.each(rsp["invalid_" + field], function(key, value) {
-                    var size = rsp["invalid_" + field].length;
+                $.each(rsp.fields[field], function(key, value) {
+                    var size = rsp.fields[field].length;
 
                     if (key == size - 1 && size > 1) {
-                      rsp["invalid_" + field][key] = "and '" + value + "'";
+                      rsp.fields[field][key] = "and '" + value + "'";
                     } else {
-                      rsp["invalid_" + field][key] = "'" + value + "'";
+                      rsp.fields[field][key] = "'" + value + "'";
                     }
                 });
 
-                var message = rsp["invalid_" + field].join(", ");
+                var message = rsp.fields[field].join(", ");
 
-                if (rsp["invalid_" + field].length == 1) {
+                if (rsp.fields[field].length == 1) {
                     if (field == "target_groups") {
                         message = "Group " + message + " does not exist.";
                     } else {
@@ -254,17 +367,23 @@ $.fn.reviewsAutoComplete = function(options) {
 
                     return parsed;
                 },
-                url: SITE_ROOT + "api/json/" + options.fieldName + "/",
+                url: SITE_ROOT + gReviewRequestSitePrefix + "api/" + options.fieldName + "/",
                 extraParams: options.extraParams
             })
             .bind("autocompleteshow", function() {
                 /*
                  * Add the footer to the bottom of the results pane the
                  * first time it's created.
+                 *
+                 * Note that we may have multiple .ui-autocomplete-results
+                 * elements, and we don't necessarily know which is tied to
+                 * this. So, we'll look for all instances that don't contain
+                 * a footer.
                  */
-                var resultsPane = $(".ui-autocomplete-results");
+                var resultsPane = $(".ui-autocomplete-results:not(" +
+                                    ":has(.ui-autocomplete-footer))");
 
-                if ($(".ui-autocomplete-footer", resultsPane).length == 0) {
+                if (resultsPane.length > 0) {
                     $("<div/>")
                         .addClass("ui-autocomplete-footer")
                         .text("Press Tab to auto-complete.")
@@ -349,7 +468,7 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
 
         yourcomment_id += "-draft";
 
-        $("<li/>")
+        var yourcomment = $("<li/>")
             .addClass("reply-comment draft editor")
             .attr("id", yourcomment_id + "-item")
             .append($("<dl/>")
@@ -358,7 +477,7 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                         .attr("for", yourcomment_id)
                         .append($("<a/>")
                             .attr("href", gUserURL)
-                            .text(gUserFullName)
+                            .html(gUserFullName)
                         )
                     )
                     .append('<dd><pre id="' + yourcomment_id + '"/></dd>')
@@ -368,7 +487,13 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
 
         var yourcommentEl = $("#" + yourcomment_id);
         createCommentEditor(yourcommentEl);
-        yourcommentEl.inlineEditor("startEdit");
+        yourcommentEl
+            .inlineEditor("startEdit")
+            .bind("cancel", function(el, initialValue) {
+                if (initialValue == "") {
+                    yourcomment.remove();
+                }
+            });
 
         addCommentLink.hide();
     }
@@ -393,7 +518,12 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                     notifyUnchangedCompletion: true,
                     multiline: true
                 })
+                .bind("beginEdit", function() {
+                    gEditCount++;
+                })
                 .bind("complete", function(e, value) {
+                    gEditCount--;
+
                     self.html(linkifyText(self.text()));
 
                     if (context_type == "body_top" ||
@@ -407,6 +537,10 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                     } else if (context_type == "screenshot_comment") {
                         obj = new RB.ScreenshotCommentReply(review_reply, null,
                                                             context_id);
+                        obj.setText(value);
+                    } else if (context_type == "file_comment") {
+                        obj = new RB.FileAttachmentCommentReply(
+                            review_reply, null, context_id);
                         obj.setText(value);
                     } else {
                         /* Shouldn't be reached. */
@@ -422,6 +556,7 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
                     });
                 })
                 .bind("cancel", function(e) {
+                    gEditCount--;
                     removeCommentFormIfEmpty(self);
                 });
         });
@@ -462,36 +597,315 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
      */
     function showReplyDraftBanner(review_id) {
         if (bannersEl.children().length == 0) {
-            bannersEl.append($("<div/>")
-                .addClass("banner")
-                .append("<h1>This reply is a draft</h1>")
-                .append(" Be sure to publish when finished.")
-                .append($('<input type="button"/>')
-                    .val("Publish")
-                    .click(function() {
-                        review_reply.publish({
-                            buttons: bannerButtonsEl,
-                            success: function() {
-                                window.location = gReviewRequestPath;
-                            }
-                        });
-                    })
-                )
-                .append($('<input type="button"/>')
-                    .val("Discard")
-                    .click(function() {
-                        review_reply.discard({
-                            buttons: bannerButtonsEl,
-                            success: function() {
-                                window.location = gReviewRequestPath;
-                            }
-                        });
-                    })
-                )
-            );
+            bannersEl.append($.replyDraftBanner(review_reply,
+                                                bannerButtonsEl));
         }
     }
 };
+
+
+/* Handles a comment issue in either the review details page, or the
+ * inline comment viewer.
+ * @param review_id the id of the review that the comment belongs to
+ * @param comment_id the id of the comment with the issue
+ * @param comment_type dictates the type of comment - either
+ *                     "comment" or "screenshot_comment"
+ * @param issue_status the initial status of the comment - either
+ *                     "open", "resolved" or "dropped"
+ * @param interactive true if the user should be shown buttons to
+ *                    manipulate the comment issue - otherwise false.
+ */
+$.fn.commentIssue = function(review_id, comment_id, comment_type,
+                             issue_status, interactive) {
+    var self = this;
+    var OPEN = 'open';
+    var RESOLVED = 'resolved';
+    var DROPPED = 'dropped';
+
+    var issue_reopen_button = $(".issue-button.reopen", this);
+    var issue_resolve_button = $(".issue-button.resolve", this);
+    var issue_drop_button = $(".issue-button.drop", this);
+    self.review_id = review_id;
+    self.comment_id = comment_id;
+    self.comment_type = comment_type;
+    self.issue_status = issue_status;
+    self.interactive = interactive;
+
+    function disableButtons() {
+        issue_reopen_button.attr("disabled", true);
+        issue_resolve_button.attr("disabled", true);
+        issue_drop_button.attr("disabled", true);
+    }
+
+    function enableButtons() {
+        issue_reopen_button.attr("disabled", false);
+        issue_resolve_button.attr("disabled", false);
+        issue_drop_button.attr("disabled", false);
+    }
+
+    function enterState(state) {
+        disableButtons();
+        gCommentIssueManager.setCommentState(self.review_id, self.comment_id,
+                                             self.comment_type, state);
+    }
+
+    issue_reopen_button.click(function() {
+        enterState(OPEN);
+    });
+
+    issue_resolve_button.click(function() {
+        enterState(RESOLVED);
+    });
+
+    issue_drop_button.click(function() {
+        enterState(DROPPED);
+    });
+
+    self.enter_state = function(state) {
+        self.state = self.STATES[state];
+        self.state.enter();
+        if (self.interactive) {
+            self.state.showButtons();
+            enableButtons();
+        }
+    }
+
+    self.update_issue_summary_table = function(new_status, old_status) {
+	var comment_id = self.comment_id;
+	var entry = $('#summary-table-entry-' + comment_id);
+
+	// Remove old status class and decrement counter.
+	entry.removeClass(old_status);
+	var old_counter = $('#' + old_status + '-counter');
+	old_counter.text(parseInt(old_counter.text(), 10) - 1);
+
+	// Add new status class, update text, and increment counter.
+	entry.addClass(new_status);
+	entry.find('.status').text(new_status);
+	var new_counter = $('#' + new_status + '-counter');
+	new_counter.text(parseInt(new_counter.text(), 10) + 1);
+    }
+
+    var open_state = {
+        enter: function() {
+            $(".issue-button.reopen", self).hide();
+            $(".issue-state", self)
+                .removeClass("dropped")
+                .removeClass("resolved")
+                .addClass("open");
+            $(".issue-message", self)
+                .text("An issue was opened.");
+        },
+        showButtons: function() {
+            $(".issue-button.drop", self).show();
+            $(".issue-button.resolve", self).show();
+        }
+    }
+
+    var resolved_state = {
+        enter: function() {
+            $(".issue-button.resolve", self).hide();
+            $(".issue-button.drop", self).hide();
+            $(".issue-state", self)
+                .removeClass("dropped")
+                .removeClass("open")
+                .addClass("resolved");
+            $(".issue-message", self)
+                .text("The issue has been resolved.");
+        },
+        showButtons: function() {
+            $(".issue-button.reopen", self).show();
+        }
+    }
+
+    var dropped_state = {
+        enter: function() {
+            $(".issue-button.resolve", self).hide();
+            $(".issue-button.drop", self).hide();
+            $(".issue-state", self)
+                .removeClass("open")
+                .removeClass("resolved")
+                .addClass("dropped");
+            $(".issue-message", self)
+                .text("The issue has been dropped.");
+        },
+        showButtons: function() {
+            $(".issue-button.reopen", self).show();
+        }
+    }
+
+    self.STATES = {};
+    self.STATES[OPEN] = open_state;
+    self.STATES[RESOLVED] = resolved_state;
+    self.STATES[DROPPED] = dropped_state;
+
+    // Set the comment to the initial state
+    self.enter_state(self.issue_status);
+
+    // Register to watch updates on the comment issue state
+    gCommentIssueManager
+        .registerCallback(self.comment_id, self.enter_state);
+
+    // Register to update issue summary table
+    gCommentIssueManager
+	.registerCallback(self.comment_id, self.update_issue_summary_table);
+
+    return self;
+}
+
+
+
+/*
+ * Wraps an inline comment so that they can display issue
+ * information.
+ */
+$.fn.issueIndicator = function() {
+    var issue_indicator = $('<div/>')
+        .addClass('issue-state')
+        .appendTo(this);
+
+    var message = $('<span/>')
+        .addClass('issue-message')
+        .appendTo(issue_indicator);
+
+    return this;
+}
+
+
+/*
+ * Wraps an inline comment so that it displays buttons
+ * for setting the state of a comment issue.
+ */
+$.fn.issueButtons = function() {
+    var issue_indicator = $(".issue-state", this);
+
+    var buttons = $('<div class="buttons"/>')
+        .addClass('buttons')
+        .appendTo(issue_indicator);
+
+    var resolve_string = "Fixed";
+    var drop_string = "Drop";
+    var reopen_string = "Re-open";
+
+    var button_string = '<input type="button" class="issue-button resolve"'
+                      + 'value="' + resolve_string + '"/>'
+                      + '<input type="button" class="issue-button drop"'
+                      + 'value="' + drop_string + '"/>'
+                      + '<input type="button" class="issue-button reopen"'
+                      + 'value="' + reopen_string + '"/>';
+
+    buttons.append(button_string);
+
+    return this;
+}
+
+
+/*
+ * Creates a floating reply banner. The banner will stay in view while the
+ * parent review is visible on screen.
+ */
+$.replyDraftBanner = function(review_reply, bannerButtonsEl) {
+    var banner = $("<div/>")
+        .addClass("banner")
+        .append("<h1>This reply is a draft</h1>")
+        .append(" Be sure to publish when finished.")
+        .append($('<input type="button"/>')
+            .val("Publish")
+            .click(function() {
+                review_reply.publish({
+                    buttons: bannerButtonsEl,
+                    success: function() {
+                        window.location = gReviewRequestPath;
+                    }
+                });
+            })
+        )
+        .append($('<input type="button"/>')
+            .val("Discard")
+            .click(function() {
+                review_reply.discard({
+                    buttons: bannerButtonsEl,
+                    success: function() {
+                        window.location = gReviewRequestPath;
+                    }
+                });
+            })
+        )
+        .floatReplyDraftBanner();
+
+    return banner;
+}
+
+/*
+ * Floats a reply draft banner. This ensures it's always visible on screen
+ * when the review is visible.
+ */
+$.fn.floatReplyDraftBanner = function() {
+    return $(this).each(function() {
+        var self = $(this);
+        var floatSpacer = null;
+        var container = null;
+
+        $(window).scroll(updateFloatPosition);
+        $(window).resize(updateSize);
+        updateFloatPosition();
+
+        function updateSize() {
+            if (floatSpacer != null) {
+                floatSpacer.height(self.height() +
+                                   self.getExtents("bpm", "tb"));
+                self.width(floatSpacer.parent().width() -
+                           self.getExtents("bpm", "lr"));
+            }
+        }
+
+        function updateFloatPosition() {
+            if (self.parent().length == 0) {
+                return;
+            }
+
+            /*
+             * Something about the below causes the "Publish" button to never
+             * show up on IE8. Turn it into a fixed box on IE.
+             */
+            if ($.browser.msie) {
+                return;
+            }
+
+            if (floatSpacer == null) {
+                floatSpacer = self.wrap($("<div/>")).parent();
+                updateSize();
+            }
+
+            if (container == null) {
+                container = self.closest('.review');
+            }
+
+            var containerTop = container.offset().top;
+            var windowTop = $(window).scrollTop();
+            var topOffset = floatSpacer.offset().top - windowTop;
+            var outerHeight = self.outerHeight();
+
+            if (!container.hasClass("collapsed") &&
+                topOffset < 0 &&
+                containerTop < windowTop &&
+                windowTop < (containerTop + container.outerHeight() -
+                             outerHeight)) {
+                self.css({
+                    top: 0,
+                    position: "fixed"
+                });
+
+                updateSize();
+            } else {
+                self.css({
+                    top: null,
+                    position: null
+                });
+            }
+        }
+    });
+}
 
 
 /*
@@ -501,6 +915,7 @@ $.fn.commentSection = function(review_id, context_id, context_type) {
  * @return {jQuery} This jQuery.
  */
 $.fn.commentDlg = function() {
+    var DIALOG_TOTAL_HEIGHT = 250;
     var SLIDE_DISTANCE = 10;
     var COMMENTS_BOX_WIDTH = 280;
     var FORM_BOX_WIDTH = 380;
@@ -511,7 +926,7 @@ $.fn.commentDlg = function() {
     var textFieldWidthDiff = 0;
     var textFieldHeightDiff = 0;
     var dirty = false;
-    var oldDirty = false;
+    var ignoreKeyUp = false;
 
     /* Page elements */
     var draftForm    = $("#draft-form", this);
@@ -520,6 +935,13 @@ $.fn.commentDlg = function() {
     var actionField  = $("#comment_action", draftForm);
     var buttons      = $(".buttons", draftForm);
     var statusField  = $(".status", draftForm);
+    var issueOptions = $("#comment-issue-options", draftForm);
+
+    var issueField = $("#comment_issue", draftForm)
+        .click(function() {
+            saveButton.attr("disabled", textField.val() == "");
+            self.setDirty(true);
+        });
     var cancelButton = $("#comment_cancel", draftForm)
         .click(function() {
             comment.deleteIfEmpty();
@@ -533,46 +955,58 @@ $.fn.commentDlg = function() {
     var saveButton = $("#comment_save", this)
         .click(function() {
             comment.setText(textField.val());
+            comment.issue_opened = issueField[0].checked;
             comment.save();
             self.close();
         });
 
-    var textField    = $("#comment_text", draftForm)
+    var textField = $("#comment_text", draftForm)
         .keydown(function(e) { e.stopPropagation(); })
         .keypress(function(e) {
             e.stopPropagation();
 
-            switch (e.keyCode) {
+            switch (e.which) {
                 case 10:
                 case $.ui.keyCode.ENTER:
                     /* Enter */
                     if (e.ctrlKey) {
+                        ignoreKeyUp = true;
                         saveButton.click();
                     }
                     break;
 
                 case $.ui.keyCode.ESCAPE:
                     /* Escape */
+                    ignoreKeyUp = true;
                     cancelButton.click();
                     break;
 
+                case 73:
+                case 105:
+                    /* I */
+                    if (e.altKey) {
+                      issueField.click();
+                      ignoreKeyUp = true;
+                    }
+
+                    break;
+
                 default:
-                    return;
+                    ignoreKeyUp = false;
+                    break;
             }
         })
         .keyup(function(e) {
-            dirty = dirty || comment.text != textField.val();
-
-            saveButton.attr("disabled", textField.val() == "");
-
-            if (dirty && !oldDirty) {
-                statusField.html("This comment has unsaved changes.");
-                self.handleResize();
-
-                oldDirty = dirty;
+            /*
+             * We check if we want to ignore this event. The state from
+             * some shortcuts (control-enter) may not be settled, and we may
+             * end up setting this to dirty, causing page leave confirmations.
+             */
+            if (!ignoreKeyUp) {
+                self.setDirty(dirty || comment.text != textField.val());
+                saveButton.attr("disabled", textField.val() == "");
+                e.stopPropagation();
             }
-
-            e.stopPropagation();
         });
 
     this
@@ -654,22 +1088,28 @@ $.fn.commentDlg = function() {
     }
 
     /*
-     * Warn the user if they try to navigate away with unsaved comments.
+     * Sets the dirty state of the comment dialog.
      *
-     * @param {event} evt The beforeunload event.
-     *
-     * @return {string} The dialog message (needed for IE).
+     * @return {jQuery} This jQuery.
      */
-    window.onbeforeunload = function(evt) {
-        if (dirty && self.is(":visible")) {
-            if (!evt) {
-                evt = window.event;
+    this.setDirty = function(newDirty) {
+        if (newDirty != dirty) {
+            dirty = newDirty;
+
+            if (dirty) {
+                gEditCount++;
+                statusField.html("This comment has unsaved changes.");
+            } else {
+                gEditCount--;
+                statusField.empty();
             }
 
-            evt.returnValue = "You have unsaved changes that will be " +
-                              "lost if you navigate away from this page.";
-            return evt.returnValue;
+            if (this.is(":visible")) {
+                this.handleResize();
+            }
         }
+
+        return this;
     };
 
     /*
@@ -680,7 +1120,7 @@ $.fn.commentDlg = function() {
     this.open = function(fromEl) {
         this
             .css({
-                top: parseInt(this.css("top")) - SLIDE_DISTANCE,
+                top: parseInt(this.css("top"), 10) - SLIDE_DISTANCE,
                 opacity: 0
             })
             .show()
@@ -690,12 +1130,10 @@ $.fn.commentDlg = function() {
                 opacity: 1
             }, 350, "swing", function() {
                 self.scrollIntoView();
-            });
+            })
+            .setDirty(false);
 
         textField.focus();
-
-        oldDirty = false;
-        dirty = false;
 
         return this;
     }
@@ -708,14 +1146,18 @@ $.fn.commentDlg = function() {
     this.close = function() {
         if (self.is(":visible")) {
             textField.val("");
-            self.animate({
-                top: "-=" + SLIDE_DISTANCE + "px",
-                opacity: 0
-            }, 350, "swing", function() {
-                self.hide();
-                self.comment = null;
-                self.trigger("close");
-            });
+            issueField[0].checked = false;
+
+            self
+                .setDirty(false)
+                .animate({
+                    top: "-=" + SLIDE_DISTANCE + "px",
+                    opacity: 0
+                }, 350, "swing", function() {
+                    self.hide();
+                    self.comment = null;
+                    self.trigger("close");
+                });
         } else {
             self.trigger("close");
         }
@@ -751,12 +1193,36 @@ $.fn.commentDlg = function() {
                 var header = $("<h2/>").appendTo(item).html(this.user.name);
                 var actions = $('<span class="actions"/>')
                     .appendTo(header);
+
                 $('<a href="' + this.url + '">View</a>').appendTo(actions);
                 $('<a href="' + gReviewRequestPath +
                   '?reply_id=' + this.comment_id +
                   '&reply_type=' + replyType + '">Reply</a>')
                     .appendTo(actions);
                 $("<pre/>").appendTo(item).text(this.text);
+
+                if (this.issue_opened) {
+                    var interactive = window['gEditable'];
+                    var issue = $('<div/>')
+                        .issueIndicator();
+
+                    if (interactive) {
+                        issue.issueButtons();
+                    }
+
+                    issue
+                        .commentIssue(this.review_id, this.comment_id,
+                                      replyType, this.issue_status, interactive)
+                        .appendTo(item);
+
+                    var self = this;
+
+                    gCommentIssueManager.registerCallback(this.comment_id,
+                        function(issue_status) {
+                            self.issue_status = issue_status;
+                        }
+                    );
+                }
 
                 item.appendTo(commentsList);
 
@@ -782,7 +1248,7 @@ $.fn.commentDlg = function() {
 
         self
             .width(width)
-            .height(250);
+            .height(DIALOG_TOTAL_HEIGHT);
 
         return this;
     }
@@ -804,7 +1270,9 @@ $.fn.commentDlg = function() {
 
         comment.ready(function() {
             textField.val(comment.text);
-            dirty = false;
+            issueField[0].checked = comment.issue_opened;
+
+            self.setDirty(false);
 
             /* Set the initial button states */
             deleteButton.setVisible(comment.loaded);
@@ -855,6 +1323,7 @@ $.fn.commentDlg = function() {
             .height(draftForm.height() - textFieldPos.top -
                     buttons.outerHeight(true) -
                     statusField.height() -
+                    issueOptions.height() -
                     textField.getExtents("bmp", "b"));
 
         return this;
@@ -896,6 +1365,8 @@ $.reviewForm = function(review) {
      * @param {string} formHTML  The HTML content for the form.
      */
     function createForm(formHTML) {
+        gEditCount++;
+
         dlg = $("<div/>")
             .attr("id", "review-form")
             .appendTo("body") // Needed for scripts embedded in the HTML
@@ -914,12 +1385,16 @@ $.reviewForm = function(review) {
                     $('<input type="button"/>')
                         .val("Discard Review")
                         .click(function(e) {
+                            gEditCount--;
                             review.deleteReview({
                                 buttons: buttons
                             });
                         }),
                     $('<input type="button"/>')
-                        .val("Cancel"),
+                        .val("Cancel")
+                        .click(function() {
+                            gEditCount--;
+                        }),
                     $('<input type="button"/>')
                         .val("Save")
                         .click(function() {
@@ -946,6 +1421,12 @@ $.reviewForm = function(review) {
                     notifyUnchangedCompletion: true,
                     showButtons: false,
                     showEditIcon: false
+                })
+                .bind("beginEdit", function() {
+                    gEditCount++;
+                })
+                .bind("cancel complete", function() {
+                    gEditCount--;
                 });
         }
 
@@ -968,8 +1449,12 @@ $.reviewForm = function(review) {
 
         $(".comment-editable", dlg).each(function() {
             var editable = $(this);
+            var comment = editable.data('comment');
+            var issueOpened = editable.next()[0].checked;
 
-            if (editable.inlineEditor("dirty")) {
+            if (editable.inlineEditor("dirty") ||
+                issueOpened != comment.issue_opened) {
+                comment.issue_opened = issueOpened;
                 $.funcQueue("reviewForm").add(function() {
                     editable
                         .one("saved", $.funcQueue("reviewForm").next)
@@ -979,7 +1464,7 @@ $.reviewForm = function(review) {
         });
 
         $.funcQueue("reviewForm").add(function() {
-            review.ship_it = $("#id_shipit", dlg)[0].checked ? 1 : 0;
+            review.ship_it = $("#id_shipit", dlg)[0].checked;
             review.body_top = $(".body-top", dlg).text();;
             review.body_bottom = $(".body-bottom", dlg).text();;
 
@@ -987,6 +1472,8 @@ $.reviewForm = function(review) {
                 buttons: buttons,
                 success: $.funcQueue("reviewForm").next
             };
+
+            gEditCount--;
 
             if (publish) {
                 review.publish(options);
@@ -1017,7 +1504,8 @@ $.reviewForm = function(review) {
 /*
  * Adds inline editing capabilities to a comment in the review form.
  *
- * @param {object} comment  A RB.DiffComment or RB.ScreenshotComment instance
+ * @param {object} comment  A RB.DiffComment, RB.FileAttachmentComment
+ *                          or RB.ScreenshotComment instance
  *                          to store the text on and save.
  */
 $.fn.reviewFormCommentEditor = function(comment) {
@@ -1033,15 +1521,46 @@ $.fn.reviewFormCommentEditor = function(comment) {
             showEditIcon: false,
             useEditIconOnly: false
         })
+        .bind("beginEdit", function() {
+            gEditCount++;
+        })
+        .bind("cancel", function() {
+            gEditCount--;
+        })
         .bind("complete", function(e, value) {
+            gEditCount--;
             comment.text = value;
             comment.save({
                 success: function() {
                     self.trigger("saved");
                 }
             });
-        });
+        })
+        .data('comment', comment);
 };
+
+
+/*
+ * Adds inline editing capabilities to close description for a review request
+ * which have been submitted or discarded.
+ *
+ * @param {int} type  1: RB.ReviewRequest.CLOSE_DISCARDED
+ *                    2: RB.ReviewRequest.CLOSE_SUBMITTED
+ */
+$.fn.reviewCloseCommentEditor = function(type) {
+    return this
+        .inlineEditor({
+            editIconPath: MEDIA_URL + "rb/images/edit.png?" + MEDIA_SERIAL,
+            multiline: true,
+            startOpen: false
+        })
+        .bind("complete", function(e, value) {
+            gReviewRequest.close({
+                type: type,
+                description: value
+            });
+        });
+}
 
 
 /*
@@ -1058,7 +1577,14 @@ $.fn.reviewRequestFieldEditor = function() {
                 startOpen: this.id == "changedescription",
                 useEditIconOnly: $(this).hasClass("comma-editable")
             })
+            .bind("beginEdit", function() {
+                gEditCount++;
+            })
+            .bind("cancel", function() {
+                gEditCount--;
+            })
             .bind("complete", function(e, value) {
+                gEditCount--;
                 setDraftField(this.id, value);
             });
     });
@@ -1084,7 +1610,14 @@ $.fn.screenshotThumbnail = function() {
                 editIconPath: MEDIA_URL + "rb/images/edit.png?" + MEDIA_SERIAL,
                 showButtons: false
             })
+            .bind("beginEdit", function() {
+                gEditCount++;
+            })
+            .bind("cancel", function() {
+                gEditCount--;
+            })
             .bind("complete", function(e, value) {
+                gEditCount--;
                 screenshot.ready(function() {
                     screenshot.caption = value;
                     screenshot.save({
@@ -1147,9 +1680,10 @@ $.newScreenshotThumbnail = function(screenshot) {
             .append($("<a/>")
                 .addClass("screenshot-editable edit")
                 .attr({
-                    href: screenshot.image_url,
+                    href: "#",
                     id: "screenshot_" + screenshot.id + "_caption"
                 })
+                .text(screenshot.caption)
             )
             .append($("<a/>")
                 .addClass("delete")
@@ -1179,6 +1713,206 @@ $.newScreenshotThumbnail = function(screenshot) {
 
 
 /*
+ * Handles interaction and events with a file attachment.
+
+ * @return {jQuery} The provided file attachment container.
+ */
+$.fn.fileAttachment = function() {
+    return $(this).each(function() {
+        var self = $(this);
+
+        var fileID = self.attr("data-file-id");
+        var fileAttachment = gReviewRequest.createFileAttachment(fileID);
+        var draftComment = null;
+        var comments = [];
+        var commentsProcessed = false;
+
+        self.find("a.edit")
+            .inlineEditor({
+                cls: "file-" + fileID + "-editor",
+                editIconPath: MEDIA_URL + "rb/images/edit.png?" + MEDIA_SERIAL,
+                showButtons: false
+            })
+            .bind("beginEdit", function() {
+                gEditCount++;
+            })
+            .bind("cancel", function() {
+                gEditCount--;
+            })
+            .bind("complete", function(e, value) {
+                gEditCount--;
+                fileAttachment.ready(function() {
+                    fileAttachment.caption = value;
+                    fileAttachment.save({
+                        buttons: gDraftBannerButtons,
+                        success: function(rsp) {
+                            gDraftBanner.show();
+                        }
+                    });
+                });
+            });
+
+        var addCommentButton =
+            self.find('.file-add-comment a')
+                .click(function() {
+                    showCommentDlg();
+                    return false;
+                });
+
+        self.find("a.delete")
+            .click(function() {
+                fileAttachment.ready(function() {
+                    fileAttachment.deleteFileAttachment()
+                    self.empty();
+                    gDraftBanner.show();
+                });
+
+                return false;
+            });
+
+        function showCommentDlg() {
+            gCommentDlg
+                .one("close", function() {
+                    processComments();
+                    createDraftComment();
+
+                    gCommentDlg
+                        .setDraftComment(draftComment)
+                        .setCommentsList(comments, "file_attachment_comment")
+                        .positionToSide(addCommentButton, {
+                            side: 'b',
+                            fitOnScreen: true
+                        });
+                    gCommentDlg.open();
+                })
+                .close();
+        }
+
+        function processComments() {
+            if (commentsProcessed) {
+                return;
+            }
+
+            var attachmentComments = gFileAttachmentComments[fileID];
+
+            if (attachmentComments && attachmentComments.length > 0) {
+                for (var i in attachmentComments) {
+                    var comment = attachmentComments[i];
+
+                    if (comment.localdraft) {
+                        createDraftComment(comment.comment_id, comment.text);
+                    } else {
+                        comments.push(comment);
+                    }
+                }
+            }
+
+            commentsProcessed = true;
+        }
+
+        function createDraftComment(commentID, text) {
+            if (draftComment != null) {
+                return;
+            }
+
+            var self = this;
+            var review = gReviewRequest.createReview();
+            draftComment = review.createFileAttachmentComment(commentID,
+                                                              fileID);
+
+            if (text) {
+                draftComment.text = text;
+            }
+
+            $.event.add(draftComment, "saved", function() {
+                showReviewBanner();
+            });
+        }
+    });
+}
+
+
+/*
+ * Adds a file to the file attachments list.
+ *
+ * If an FileAttachment object is given, then this will display the
+ * file data. Otherwise, this will display a placeholder.
+ *
+ * @param {object} fileAttachment  The optional file to display.
+ *
+ * @return {jQuery} The root file attachment div.
+ */
+$.newFileAttachment = function(fileAttachment) {
+    var container = $('<div/>')
+        .addClass('file-container');
+
+    var body = $('<div/>')
+        .addClass('file')
+        .appendTo(container);
+
+    var actions = $('<ul/>')
+        .addClass('actions')
+        .appendTo(body);
+
+    var fileHeader = $('<div/>')
+        .addClass('file-header')
+        .appendTo(body);
+
+    var fileCaption = $('<div/>')
+        .addClass('file-caption')
+        .append($('<a/>')
+            .addClass('edit'))
+        .appendTo(body);
+
+    if (fileAttachment) {
+        container.attr('data-file-id', fileAttachment.id);
+
+        actions.append($('<li/>')
+            .addClass('file-add-comment')
+            .append($('<a/>')
+                .attr('href', '#')
+                .text('Add Comment')));
+
+        fileHeader
+            .append($('<img/>')
+                .attr('src', fileAttachment.icon_url))
+            .append(' ')
+            .append($('<a/>')
+                .attr('href', fileAttachment.url)
+                .text(fileAttachment.filename))
+            .append(' ')
+            .append($('<a/>')
+                .addClass('delete')
+                .attr('href', '#')
+                .append($('<img/>')
+                    .attr({
+                        src: MEDIA_URL + 'rb/images/delete.png?' +
+                             MEDIA_SERIAL,
+                        alt: 'Delete File'
+                    })));
+
+        fileCaption.find('a')
+            .attr('href', fileAttachment.url)
+            .text(fileAttachment.caption);
+    }
+
+    container.fileAttachment();
+
+    var attachments = $("#file-list");
+    $(attachments.parent()[0]).show();
+    return container.insertBefore(attachments.find("br"));
+};
+
+
+/*
+ * Sets the list of file attachment comments.
+ */
+function setFileAttachmentComments(comments) {
+    gFileAttachmentComments = comments;
+}
+
+
+/*
  * Registers for updates to the review request. This will cause a pop-up
  * bubble to be displayed when updates of the specified type are displayed.
  *
@@ -1188,12 +1922,30 @@ $.newScreenshotThumbnail = function(screenshot) {
  *                                undefined for all types.
  */
 function registerForUpdates(lastTimestamp, type) {
+    function updateFavIcon(url) {
+        var head = $("head");
+        head.find("link[rel=icon]").remove();
+        head.append($("<link/>")
+            .attr({
+                href: url,
+                rel: "icon",
+                type: "image/x-icon"
+            }));
+    }
+
     var bubble = $("#updates-bubble");
     var summaryEl;
     var userEl;
 
+    var faviconEl = $("head").find("link[rel=icon]");
+    var faviconURL = faviconEl.attr("href");
+    var faviconNotifyURL = MEDIA_URL + "rb/images/favicon_notify.ico?" +
+                           MEDIA_SERIAL;
+
     $.event.add(gReviewRequest, "updated", function(evt, info) {
         if (bubble.length == 0) {
+            updateFavIcon(faviconNotifyURL);
+
             bubble = $('<div id="updates-bubble"/>');
             summaryEl = $('<span/>')
                 .appendTo(bubble);
@@ -1213,6 +1965,7 @@ function registerForUpdates(lastTimestamp, type) {
                         .append($('<a href="#">Ignore</a>')
                             .click(function() {
                                 bubble.fadeOut();
+                                updateFavIcon(faviconURL);
                                 return false;
                             }))
                 )
@@ -1326,99 +2079,142 @@ function loadDiffFragments(queue_name, container_prefix) {
 
 
 /*
- * Initializes screenshot drag-and-drop support.
+ * Initializes drag-and-drop support.
  *
- * This makes it possible to drag screenshots from a file manager
- * and drop them into Review Board. This requires browser support for the
- * HTML 5 file drag-and-drop.
+ * This makes it possible to drag screenshots and other files from a file
+ * manager and drop them into Review Board. This requires browser support
+ * for HTML 5 file drag-and-drop.
  */
-function initScreenshotDnD() {
-    var thumbnails = $("#screenshot-thumbnails");
+function initDnD() {
     var dropIndicator = null;
-    var thumbnailsContainer = $(thumbnails.parent()[0]);
-    var thumbnailsContainerVisible = thumbnailsContainer.is(":visible");
+    var screenshotDropBox;
+    var fileDropBox;
+    var middleBox;
+    var removeDropIndicatorHandle = null;
 
-    thumbnails
+    $(document.body)
         .bind("dragenter", function(event) {
-            var dt = event.originalEvent.dataTransfer;
-            dt.dropEffect = "copy";
-            event.preventDefault();
-            return false;
-        })
-        .bind("dragover", function(event) {
-            return false;
-        })
-        .bind("dragexit", function(event) {
-            var dt = event.originalEvent.dataTransfer;
-
-            if (dt) {
-                dt.dropEffect = "none";
-            }
-
-            handleDragExit(event);
-            return false;
-        })
-        .bind("drop", handleDrop);
-
-    var reviewRequestContainer =
-        $(".review-request")
-            .bind("dragenter", handleDragEnter)
-            .bind("dragexit", handleDragExit);
+            handleDragEnter(event);
+        });
 
     function handleDragEnter(event) {
         if (!dropIndicator) {
-            dropIndicator = $("<h1/>")
-                .css("border", "1px black solid")
+            var height = $(window).height();
+
+            dropIndicator = $("<div/>")
                 .addClass("drop-indicator")
-                .html("Drop screenshots here to upload")
-                .appendTo(thumbnails);
+                .appendTo(document.body)
+                .width($(window).width())
+                .height(height)
+                .bind("dragleave", function(event) {
+                    /*
+                     * This should check whether we've exited the drop
+                     * indicator properly. It'll prevent problems when
+                     * transitioning between elements within the indicator.
+                     *
+                     * Note that while this should work cross-browser,
+                     * Firefox 4+ appears broken in that it doesn't send us
+                     * dropleave events on exiting the window.
+                     *
+                     * Also note that it doesn't appear that we need to check
+                     * the Y coordinate. X should be 0 in most cases when
+                     * leaving, except when dragging over the right scrollbar
+                     * in Chrome, when it'll be >= the container width.
+                     */
+                    if (event.pageX <= 0 ||
+                        event.pageX >= dropIndicator.width()) {
+                        handleDragExit();
+                    }
 
-            thumbnails.addClass("dragover");
-
-            thumbnailsContainer
-                .addClass("sliding")
-                .slideDown("normal", function() {
-                    thumbnailsContainer.removeClass("sliding");
-                    thumbnails.scrollIntoView();
+                    return false;
+                })
+                .mouseenter(function() {
+                    /*
+                     * If we get a mouse enter, then the user has moved
+                     * the mouse over the drop indicator without there
+                     * being any drag-and-drop going on. This is likely due
+                     * to the broken Firefox 4+ behavior where dragleave
+                     * events when leaving windows aren't firing.
+                     */
+                    handleDragExit();
+                    return false;
                 });
-        }
 
-        return true;
+            screenshotDropBox = $("<div/>")
+                .addClass("dropbox")
+                .appendTo(dropIndicator)
+                .bind('drop', function(event) {
+                    return handleDrop(event, "screenshot");
+                });
+            var screenshotText = $("<h1/>")
+                .text("Drop Screenshot")
+                .appendTo(screenshotDropBox);
+
+            middleBox = $("<h2/>")
+                .text("or")
+                .appendTo(dropIndicator);
+
+            fileDropBox = $("<div/>")
+                .addClass("dropbox")
+                .appendTo(dropIndicator)
+                .bind('drop', function(event) {
+                    return handleDrop(event, "file");
+                });
+            var fileText = $("<h1/>")
+                .text("Drop File Attachment")
+                .appendTo(fileDropBox);
+
+            var dropBoxHeight = (height - middleBox.height()) / 2;
+            $([screenshotDropBox[0], fileDropBox[0]])
+                .height(dropBoxHeight)
+                .bind("dragover", function() {
+                    var dt = event.originalEvent.dataTransfer;
+
+                    if (dt) {
+                        dt.dropEffect = "copy";
+                    }
+
+                    $(this).addClass("hover");
+                    return false;
+                })
+                .bind("dragleave", function(event) {
+                    var dt = event.originalEvent.dataTransfer;
+
+                    if (dt) {
+                        dt.dropEffect = "none";
+                    }
+
+                    $(this).removeClass("hover");
+                });
+
+            screenshotText.css("margin-top", -screenshotText.height() / 2);
+            fileText.css("margin-top", -fileText.height() / 2);
+        }
     }
 
-    function handleDragExit(event) {
-        if (event != null) {
-            var offset = reviewRequestContainer.offset();
-            var width = reviewRequestContainer.width();
-            var height = reviewRequestContainer.height();
-
-            if (event.pageX >= offset.left &&
-                event.pageX < offset.left + width &&
-                event.pageY >= offset.top &&
-                event.pageY < offset.top + height) {
-                return true;
-            }
+    function handleDragExit(closeImmediately) {
+        if (dropIndicator == null) {
+            return;
         }
 
-        thumbnails.removeClass("dragover");
-
-        if (!thumbnailsContainerVisible) {
-            thumbnailsContainer
-                .addClass("sliding")
-                .slideUp("normal", function() {
-                    thumbnailsContainer.removeClass("sliding");
-                });
+        if (removeDropIndicatorHandle) {
+            window.clearInterval(removeDropIndicatorHandle);
+            removeDropIndicatorHandle = null;
         }
 
-        if (dropIndicator != null) {
-            dropIndicator.remove();
-            dropIndicator = null;
+        if (closeImmediately) {
+            dropIndicator.fadeOut(function() {
+                dropIndicator.remove();
+                dropIndicator = null;
+            });
+        } else {
+            removeDropIndicatorHandle = window.setInterval(function() {
+                handleDragExit(true);
+            }, 1000);
         }
-
-        return true;
     }
 
-    function handleDrop(event) {
+    function handleDrop(event, type) {
         /* Do these early in case we hit some error. */
         event.stopPropagation();
         event.preventDefault();
@@ -1431,36 +2227,45 @@ function initScreenshotDnD() {
             return;
         }
 
-        var foundImages = false;
+        if (type == "screenshot") {
+            var foundImages = false;
 
-        for (var i = 0; i < files.length; i++) {
-            var file = files[i];
+            for (var i = 0; i < files.length; i++) {
+                var file = files[i];
 
-            if (file.type == "image/jpeg" ||
-                file.type == "image/pjpeg" ||
-                file.type == "image/png" ||
-                file.type == "image/bmp" ||
-                file.type == "image/gif" ||
-                file.type == "image/svg+xml") {
+                if (file.type == "image/jpeg" ||
+                    file.type == "image/pjpeg" ||
+                    file.type == "image/png" ||
+                    file.type == "image/bmp" ||
+                    file.type == "image/gif" ||
+                    file.type == "image/svg+xml") {
 
-                foundImages = true;
+                    foundImages = true;
 
-                uploadScreenshot(file);
+                    uploadScreenshot(file);
+                }
             }
-        }
 
-        if (foundImages) {
-            thumbnailsContainerVisible = true;
-            handleDragExit(null);
-        } else {
-            if (dropIndicator) {
-                dropIndicator.html("None of the dropped files were valid " +
+            if (foundImages) {
+                handleDragExit();
+            } else {
+                if (dropIndicator) {
+                    screenshotDropBox.empty();
+                    fileDropBox.empty();
+                    middleBox.html("None of the dropped files were valid " +
                                    "images");
+                }
+
+                setTimeout(function() {
+                    handleDragExit(true);
+                }, 1500);
+            }
+        } else if (type == "file") {
+            for (var i = 0; i < files.length; i++) {
+                uploadFile(files[i]);
             }
 
-            setTimeout(function() {
-                handleDragExit(null);
-            }, 1500);
+            handleDragExit(true);
         }
     }
 
@@ -1476,6 +2281,26 @@ function initScreenshotDnD() {
             buttons: gDraftBannerButtons,
             success: function(rsp, screenshot) {
                 thumb.replaceWith($.newScreenshotThumbnail(screenshot));
+                gDraftBanner.show();
+            },
+            error: function(rsp, msg) {
+                thumb.remove();
+            }
+        });
+    }
+
+    function uploadFile(file) {
+        /* Create a temporary file listing. */
+        var thumb = $.newFileAttachment()
+            .css("opacity", 0)
+            .fadeTo(1000, 1);
+
+        var fileAttachment = gReviewRequest.createFileAttachment();
+        fileAttachment.setFile(file);
+        fileAttachment.save({
+            buttons: gDraftBannerButtons,
+            success: function(rsp, fileAttachment) {
+                thumb.replaceWith($.newFileAttachment(fileAttachment));
                 gDraftBanner.show();
             },
             error: function(rsp, msg) {
@@ -1507,7 +2332,7 @@ $(document).ready(function() {
         }, 400);
     }
 
-    $("#actions > li:has(ul.menu)")
+    $(".actions > li:has(ul.menu)")
         .hover(showMenu, hideMenu)
         .toggle(showMenu, hideMenu);
 
@@ -1545,12 +2370,22 @@ $(document).ready(function() {
     $("#link-review-request-close-submitted").click(function() {
         /*
          * This is a non-destructive event, so don't confirm unless there's
-         * a draft. (TODO)
+         * a draft.
          */
-        gReviewRequest.close({
-            type: RB.ReviewRequest.CLOSE_SUBMITTED,
-            buttons: gDraftBannerButtons
-        });
+        var submit = true;
+        if ($("#draft-banner").is(":visible")) {
+            submit = confirm("You have an unpublished draft. If you close " +
+                             "this review request, the draft will be " +
+                             "discarded. Are you sure you want to close " +
+                             "the review request?");
+        }
+
+        if (submit) {
+            gReviewRequest.close({
+                type: RB.ReviewRequest.CLOSE_SUBMITTED,
+                buttons: gDraftBannerButtons
+            });
+        }
 
         return false;
     });
@@ -1595,8 +2430,8 @@ $(document).ready(function() {
     });
 
     $("#shipit-link").click(function() {
-        if (confirm("Are you sure?")) {
-            pendingReview.shipit = 1;
+        if (confirm("Are you sure you want to post this review?")) {
+            pendingReview.ship_it = true;
             pendingReview.body_top = "Ship It!";
             pendingReview.publish({
                 buttons: null,
@@ -1657,16 +2492,31 @@ $(document).ready(function() {
         $(this).closest(".box").toggleClass('collapsed');
     });
 
-    /* Expand all reviews */
+    /* Expand all reviews and issue summary table */
     $("#expand-all").click(function() {
         $(".collapsed").removeClass("collapsed");
         return false;
     });
 
+    /* Collapse all reviews and issue summary table */
+    $("#collapse-all").click(function() {
+	$(".box").addClass("collapsed");
+	return false;
+    });
+
+    gCommentDlg = $("#comment-detail")
+        .commentDlg()
+        .css("z-index", 999);
+    gCommentDlg.appendTo("body");
+
+    $("#submitted-banner #changedescription.editable").reviewCloseCommentEditor(RB.ReviewRequest.CLOSE_SUBMITTED);
+    $("#discard-banner #changedescription.editable").reviewCloseCommentEditor(RB.ReviewRequest.CLOSE_DISCARDED);
+
     if (gUserAuthenticated) {
         if (window["gEditable"]) {
             $(".editable").reviewRequestFieldEditor();
             $(".screenshot-container").screenshotThumbnail();
+            $(".file-container").fileAttachment();
 
             var targetGroupsEl = $("#target_groups");
             var targetPeopleEl = $("#target_people");
@@ -1674,6 +2524,12 @@ $(document).ready(function() {
             if (targetGroupsEl.length > 0) {
                 targetGroupsEl
                     .inlineEditor("field")
+                    .bind("beginEdit", function() {
+                        gEditCount++;
+                    })
+                    .bind("cancel complete", function() {
+                        gEditCount--;
+                    })
                     .reviewsAutoComplete({
                         fieldName: "groups",
                         nameKey: "name",
@@ -1687,6 +2543,12 @@ $(document).ready(function() {
             if (targetPeopleEl.length > 0) {
                 targetPeopleEl
                     .inlineEditor("field")
+                    .bind("beginEdit", function() {
+                        gEditCount++;
+                    })
+                    .bind("cancel complete", function() {
+                        gEditCount--;
+                    })
                     .reviewsAutoComplete({
                         fieldName: "users",
                         nameKey: "username",
@@ -1697,11 +2559,51 @@ $(document).ready(function() {
                     });
             }
 
-            initScreenshotDnD();
+            /*
+             * Warn the user if they try to navigate away with unsaved comments.
+             *
+             * @param {event} evt The beforeunload event.
+             *
+             * @return {string} The dialog message (needed for IE).
+             */
+            window.onbeforeunload = function(evt) {
+                if (gEditCount > 0) {
+                    /*
+                     * On IE, the text must be set in evt.returnValue.
+                     *
+                     * On Firefox, it must be returned as a string.
+                     *
+                     * On Chrome, it must be returned as a string, but you
+                     * can't set it on evt.returnValue (it just ignores it).
+                     */
+                    var msg = "You have unsaved changes that will " +
+                              "be lost if you navigate away from " +
+                              "this page.";
+                    evt = evt || window.event;
+
+                    evt.returnValue = msg;
+                    return msg;
+                }
+            };
+
+            initDnD();
         }
     }
 
     loadDiffFragments("diff_fragments", "comment_container");
+
+    $(".summary-table-description").click(function() {
+        /*
+         * Extract the href attribute and remove the leading
+         * '#', then attach '#comment-' and '-issue' to
+         * find the comment's location. Then find the
+         * closest box class and uncollapse it.
+         */
+        var issueId = '#comment-' +
+                      $(this).find("a.summary-anchor").attr("href").slice(1) +
+                      '-issue';
+        $(issueId).closest(".box").removeClass("collapsed");
+    });
 });
 
 // vim: set et:sw=4:

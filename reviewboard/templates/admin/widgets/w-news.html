@@ -1,0 +1,19 @@
+{% load i18n %}
+<div class="news-content-widget">
+ <img src="{{MEDIA_URL}}rb/images/spinner.gif?{{MEDIA_SERIAL}}"
+      class="loading-indicator" width="16" height="16" border="0" alt="" />
+ {% trans "Loading..." %}
+</div>
+<script type="text/javascript">
+$(document).ready(function () {
+    // RSS Feed Controls
+    $("a.reload-news").click(function(evt) {
+        $(".news-content-widget").load("feed/news/?reload=1");
+            evt.preventDefault();
+        });
+
+    $(".news-content-widget").load("feed/news/", function() {
+        $('#admin-extras').masonry('reload');
+    });
+});
+</script>

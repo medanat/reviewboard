@@ -27,25 +27,24 @@
 
 import logging
 import os
-import pkg_resources
 import re
 import urlparse
 
 from django import forms
 from django.contrib.sites.models import Site
-from django.utils.datastructures import SortedDict
+from django.core.cache import parse_backend_uri, InvalidCacheBackendError
 from django.utils.translation import ugettext as _
 from djblets.log import restart_logging
 from djblets.siteconfig.forms import SiteSettingsForm
 import pytz
 
-from reviewboard.accounts.forms import BuiltinAuthSettingsForm, \
-                                       LegacyAuthModuleSettingsForm
+from reviewboard.accounts.forms import LegacyAuthModuleSettingsForm
 from reviewboard.admin.checks import get_can_enable_search, \
                                      get_can_enable_syntax_highlighting, \
                                      get_can_use_amazon_s3, \
                                      get_can_use_couchdb
 from reviewboard.admin.siteconfig import load_site_config
+from reviewboard.scmtools import sshutils
 
 
 class GeneralSettingsForm(SiteSettingsForm):
@@ -85,8 +84,16 @@ class GeneralSettingsForm(SiteSettingsForm):
         required=False)
 
     search_index_file = forms.CharField(
-        label=_("Search index file"),
-        help_text=_("The file that search index data should be stored in."),
+        label=_("Search index directory"),
+        help_text=_("The directory that search index data should be stored "
+                    "in."),
+        required=False,
+        widget=forms.TextInput(attrs={'size': '50'}))
+
+    cache_backend = forms.CharField(
+        label=_("Cache Backend"),
+        help_text=_("The path to the cache backend."
+                    "Example: 'memcached://127.0.0.1:11211/'"),
         required=False,
         widget=forms.TextInput(attrs={'size': '50'}))
 
@@ -132,6 +139,33 @@ class GeneralSettingsForm(SiteSettingsForm):
         # Reload any important changes into the Django settings.
         load_site_config()
 
+    def clean_cache_backend(self):
+        """Validates that the specified cache backend is parseable by Django."""
+        backend = self.cleaned_data['cache_backend'].strip()
+        if backend:
+            try:
+                parse_backend_uri(backend)
+            except InvalidCacheBackendError, e:
+                raise forms.ValidationError(e)
+
+    def clean_search_index_file(self):
+        """Validates that the specified index file is valid."""
+        index_file = self.cleaned_data['search_index_file'].strip()
+
+        if index_file:
+            if not os.path.isabs(index_file):
+                raise forms.ValidationError(
+                    _("The search index path must be absolute."))
+
+            if (os.path.exists(index_file) and
+                not os.access(index_file, os.W_OK)):
+                raise forms.ValidationError(
+                    _('The search index path is not writable. Make sure the '
+                      'web server has write access to it and its parent '
+                      'directory.'))
+
+        return index_file
+
 
     class Meta:
         title = _("General Settings")
@@ -144,7 +178,8 @@ class GeneralSettingsForm(SiteSettingsForm):
                 'fields':  ('server', 'site_media_url',
                             'site_admin_name',
                             'site_admin_email',
-                            'locale_timezone'),
+                            'locale_timezone',
+                            'cache_backend'),
             },
             {
                 'classes': ('wide',),
@@ -155,17 +190,8 @@ class GeneralSettingsForm(SiteSettingsForm):
 
 
 class AuthenticationSettingsForm(SiteSettingsForm):
-    BUILTIN_AUTH_ID = 'builtin'
     CUSTOM_AUTH_ID = 'custom'
-
-    BUILTIN_AUTH_CHOICE = (BUILTIN_AUTH_ID, _('Standard Registration'))
-    CUSTOM_AUTH_CHOICE = (CUSTOM_AUTH_ID,
-                          _('Legacy Authentication Module'))
-
-    DEFAULT_BACKEND_FORMS = {
-        BUILTIN_AUTH_ID: BuiltinAuthSettingsForm,
-        CUSTOM_AUTH_ID: LegacyAuthModuleSettingsForm,
-    }
+    CUSTOM_AUTH_CHOICE = (CUSTOM_AUTH_ID, _('Legacy Authentication Module'))
 
 
     auth_anonymous_access = forms.BooleanField(
@@ -182,6 +208,8 @@ class AuthenticationSettingsForm(SiteSettingsForm):
         required=True)
 
     def __init__(self, siteconfig, *args, **kwargs):
+        from reviewboard.accounts.backends import get_registered_auth_backends
+
         super(AuthenticationSettingsForm, self).__init__(siteconfig,
                                                          *args, **kwargs)
 
@@ -190,38 +218,42 @@ class AuthenticationSettingsForm(SiteSettingsForm):
         cur_auth_backend = (self['auth_backend'].data or
                             self.fields['auth_backend'].initial)
 
-        for auth_id, auth_form_class in self.DEFAULT_BACKEND_FORMS.iteritems():
-            if auth_id == cur_auth_backend:
-                auth_form = auth_form_class(siteconfig, *args, **kwargs)
-            else:
-                auth_form = auth_form_class(siteconfig)
+        if cur_auth_backend == self.CUSTOM_AUTH_ID:
+            custom_auth_form = LegacyAuthModuleSettingsForm(siteconfig,
+                                                            *args, **kwargs)
+        else:
+            custom_auth_form = LegacyAuthModuleSettingsForm(siteconfig)
 
-            self.auth_backend_forms[auth_id] = auth_form
+        self.auth_backend_forms[self.CUSTOM_AUTH_ID] = custom_auth_form
 
         backend_choices = []
+        builtin_auth_choice = None
 
-        for ep in pkg_resources.iter_entry_points('reviewboard.auth_backends'):
+        for backend_id, backend in get_registered_auth_backends():
             try:
-                backend = ep.load()
-
                 if backend.settings_form:
-                    if cur_auth_backend == ep.name:
+                    if cur_auth_backend == backend_id:
                         backend_form = backend.settings_form(siteconfig,
                                                              *args, **kwargs)
                     else:
                         backend_form = backend.settings_form(siteconfig)
 
-                    self.auth_backend_forms[ep.name] = backend_form
+                    self.auth_backend_forms[backend_id] = backend_form
                     backend_form.load()
 
-                backend_choices.append((ep.name, backend.name))
+                choice = (backend_id, backend.name)
+
+                if backend_id == 'builtin':
+                    builtin_auth_choice = choice
+                else:
+                    backend_choices.append(choice)
             except Exception, e:
                 logging.error('Error loading authentication backend %s: %s'
-                              % (ep.name, e),
+                              % (backend_id, e),
                               exc_info=1)
 
         backend_choices.sort(key=lambda x: x[1])
-        backend_choices.insert(0, self.BUILTIN_AUTH_CHOICE)
+        backend_choices.insert(0, builtin_auth_choice)
         backend_choices.append(self.CUSTOM_AUTH_CHOICE)
         self.fields['auth_backend'].choices = backend_choices
 
@@ -255,24 +287,6 @@ class AuthenticationSettingsForm(SiteSettingsForm):
                 valid = self.auth_backend_forms[auth_backend].is_valid()
 
         return valid
-
-    def clean_recaptcha_public_key(self):
-        """Validates that the reCAPTCHA public key is specified if needed."""
-        key = self.cleaned_data['recaptcha_public_key'].strip()
-
-        if self.cleaned_data['auth_registration_show_captcha'] and not key:
-            raise forms.ValidationError(_('This field is required.'))
-
-        return key
-
-    def clean_recaptcha_private_key(self):
-        """Validates that the reCAPTCHA private key is specified if needed."""
-        key = self.cleaned_data['recaptcha_private_key'].strip()
-
-        if self.cleaned_data['auth_registration_show_captcha'] and not key:
-            raise forms.ValidationError(_('This field is required.'))
-
-        return key
 
     def full_clean(self):
         super(AuthenticationSettingsForm, self).full_clean()
@@ -309,6 +323,15 @@ class EMailSettingsForm(SiteSettingsForm):
     """
     mail_send_review_mail = forms.BooleanField(
         label=_("Send e-mails for review requests and reviews"),
+        required=False)
+    mail_send_new_user_mail = forms.BooleanField(
+        label=_("Send e-mails when new users register an account"),
+        required=False)
+    mail_default_from = forms.CharField(
+        label=_("Sender e-mail address"),
+        help_text=_('The e-mail address that all e-mails will be sent from. '
+                    'The "Sender" header will be used to make e-mails appear '
+                    'to come from the user triggering the e-mail.'),
         required=False)
     mail_host = forms.CharField(
         label=_("Mail Server"),
@@ -477,6 +500,7 @@ class LoggingSettingsForm(SiteSettingsForm):
         load_site_config()
         restart_logging()
 
+
     class Meta:
         title = _("Logging Settings")
         fieldsets = (
@@ -494,6 +518,43 @@ class LoggingSettingsForm(SiteSettingsForm):
         )
 
 
+class SSHSettingsForm(forms.Form):
+    generate_key = forms.BooleanField(required=False,
+                                      initial=True,
+                                      widget=forms.HiddenInput)
+    keyfile = forms.FileField(label=_('Key file'),
+                              required=False,
+                              widget=forms.FileInput(attrs={'size': '35'}))
+
+    def create(self, files):
+        if self.cleaned_data['generate_key']:
+            try:
+                sshutils.generate_user_key()
+            except IOError, e:
+                self.errors['generate_key'] = forms.util.ErrorList([
+                    _('Unable to write SSH key file: %s') % e
+                ])
+                raise
+            except Exception, e:
+                self.errors['generate_key'] = forms.util.ErrorList([
+                    _('Error generating SSH key: %s') % e
+                ])
+                raise
+        elif self.cleaned_data['keyfile']:
+            try:
+                sshutils.import_user_key(files['keyfile'])
+            except IOError, e:
+                self.errors['keyfile'] = forms.util.ErrorList([
+                    _('Unable to write SSH key file: %s') % e
+                ])
+                raise
+            except Exception, e:
+                self.errors['keyfile'] = forms.util.ErrorList([
+                    _('Error uploading SSH key: %s') % e
+                ])
+                raise
+
+
 class StorageSettingsForm(SiteSettingsForm):
     """File storage backend settings for Review Board."""
 
@@ -506,7 +567,7 @@ class StorageSettingsForm(SiteSettingsForm):
             #('couchdb',    _('CouchDB')),
         ),
         help_text=_('Storage method and location for uploaded files, such as '
-                    'screenshots.'),
+                    'screenshots and file attachments.'),
         required=True)
 
     aws_access_key_id = forms.CharField(
@@ -571,6 +632,8 @@ class StorageSettingsForm(SiteSettingsForm):
         if not can_use_couchdb:
             self.disabled_fields['couchdb_default_server'] = True
             self.disabled_reasons['couchdb_default_server'] = reason
+
+        super(StorageSettingsForm, self).load()
 
     def save(self):
         super(StorageSettingsForm, self).save()

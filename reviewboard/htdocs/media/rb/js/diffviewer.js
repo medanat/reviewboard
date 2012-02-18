@@ -82,7 +82,6 @@ var gSelectedAnchor = INVALID;
 var gFileAnchorToId = {};
 var gInterdiffFileAnchorToId = {};
 var gAnchors = $();
-var gCommentDlg = null;
 var gHiddenComments = {};
 var gDiffHighlightBorder = null;
 var gStartAtAnchor = null;
@@ -103,7 +102,7 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
                           comments) {
     var self = this;
 
-    var table = beginRow.parents("table:first")
+    var table = beginRow.parents("table:first");
     var fileid = table[0].id;
 
     this.filediff = gFileAnchorToId[fileid];
@@ -147,8 +146,7 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
     }
 
     this.anchor = $("<a/>")
-        .attr("name",
-              "file" + this.filediff['id'] + "line" + this.beginLineNum)
+        .attr("name", "file" + this.filediff.id + "line" + this.beginLineNum)
         .addClass("comment-anchor")
         .appendTo(this.el);
 
@@ -159,6 +157,9 @@ function DiffCommentBlock(beginRow, endRow, beginLineNum, endLineNum,
     if (comments && comments.length > 0) {
         for (var i in comments) {
             var comment = comments[i];
+
+            // We load in encoded text, so decode it.
+            comment.text = $("<div/>").html(comment.text).text();
 
             if (comment.localdraft) {
                 this._createDraftComment(comment.comment_id, comment.text);
@@ -271,13 +272,6 @@ $.extend(DiffCommentBlock.prototype, {
      */
     showCommentDlg: function() {
         var self = this;
-
-        if (gCommentDlg == null) {
-            gCommentDlg = $("#comment-detail")
-                .commentDlg()
-                .css("z-index", 999);
-            gCommentDlg.appendTo("body");
-        }
 
         gCommentDlg
             .one("close", function() {
@@ -525,7 +519,7 @@ $.fn.diffFile = function(lines, key) {
         function beginSelection(row) {
             selection.begin    = selection.end    = row;
             selection.beginNum = selection.endNum =
-                parseInt(row.attr('line'));
+                parseInt(row.attr('line'), 10);
 
             selection.lastSeenIndex = row[0].rowIndex;
             row.addClass("selected");
@@ -577,7 +571,7 @@ $.fn.diffFile = function(lines, key) {
 
             if (selection.begin != null) {
                 /* We have an active selection. */
-                var linenum = parseInt(row.attr("line"));
+                var linenum = parseInt(row.attr("line"), 10);
 
                 if (linenum < selection.beginNum) {
                     selection.beginNum = linenum;
@@ -877,7 +871,7 @@ function findLineNumRow(table, linenum, startRow, endRow) {
         row = table.rows[row_offset + linenum];
 
         // Account for the "x lines hidden" row.
-        if (row != null && parseInt(row.getAttribute('line')) == linenum) {
+        if (row != null && parseInt(row.getAttribute('line'), 10) == linenum) {
             return row;
         }
     }
@@ -890,9 +884,9 @@ function findLineNumRow(table, linenum, startRow, endRow) {
     var low = startRow || 1;
     var high = Math.min(endRow || table.rows.length, table.rows.length);
 
-    if (endRow != undefined) {
+    if (endRow != undefined && endRow < table.rows.length) {
         /* See if we got lucky and found it in the last row. */
-        if (parseInt(table.rows[endRow].getAttribute('line')) == linenum) {
+        if (parseInt(table.rows[endRow].getAttribute('line'), 10) == linenum) {
             return table.rows[endRow];
         }
     } else if (row != null) {
@@ -920,7 +914,7 @@ function findLineNumRow(table, linenum, startRow, endRow) {
             continue;
         }
 
-        var value = parseInt(row.getAttribute('line'))
+        var value = parseInt(row.getAttribute('line'), 10);
 
         if (!value) {
             /*
@@ -933,13 +927,13 @@ function findLineNumRow(table, linenum, startRow, endRow) {
 
             for (var k = 1; k <= (high-low) / 2; k++) {
                 row = table.rows[row_offset + i + k];
-                if (row && parseInt(row.getAttribute('line'))) {
+                if (row && parseInt(row.getAttribute('line'), 10)) {
                     i = i + k;
                     found = true;
                     break;
                 } else {
                     row = table.rows[row_offset + i - k];
-                    if (row && parseInt(row.getAttribute('line'))) {
+                    if (row && parseInt(row.getAttribute('line'), 10)) {
                         i = i - k;
                         found = true;
                         break;
@@ -948,7 +942,7 @@ function findLineNumRow(table, linenum, startRow, endRow) {
             }
 
             if (found) {
-                value = parseInt(row.getAttribute('line'));
+                value = parseInt(row.getAttribute('line'), 10);
             } else {
                 return null;
             }
@@ -961,7 +955,7 @@ function findLineNumRow(table, linenum, startRow, endRow) {
             var guessRow = table.rows[guessRowNum];
 
             if (guessRow
-                && parseInt(guessRow.getAttribute('line')) == linenum) {
+                && parseInt(guessRow.getAttribute('line'), 10) == linenum) {
                 /* We found it using maths! */
                 return guessRow;
             }
@@ -1330,7 +1324,7 @@ function toggleExtraWhitespace(init)
     }
 
     /* Toggle highlighting */
-    $("table.sidebyside .ew").toggleClass("ewhl");
+    $("#diffs").toggleClass("ewhl");
 
     /* Toggle the display of the button itself */
     $(".review-request ul.controls li.ew").toggle();
@@ -1338,6 +1332,11 @@ function toggleExtraWhitespace(init)
 
 
 $(document).ready(function() {
+    if (!window.gRevision) {
+        /* We're not running in the diff viewer. No need for setup. */
+        return;
+    }
+
     gDiff = gReviewRequest.createDiff(gRevision, gInterdiffRevision);
 
     $(document).keypress(function(evt) {

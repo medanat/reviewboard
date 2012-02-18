@@ -1,11 +1,14 @@
 from datetime import datetime
 import logging
 
+from django.conf import settings
 from django.contrib.sites.models import Site
 from django.core.mail import EmailMultiAlternatives
+from django.core.urlresolvers import reverse
 from django.template.loader import render_to_string
 from djblets.siteconfig.models import SiteConfiguration
 
+from reviewboard.accounts.signals import user_registered
 from reviewboard.reviews.models import ReviewRequest, Review
 from reviewboard.reviews.signals import review_request_published, \
                                         review_published, reply_published
@@ -46,18 +49,34 @@ def reply_published_cb(sender, user, reply, **kwargs):
         mail_reply(user, reply)
 
 
+def user_registered_cb(user, **kwargs):
+    """
+    Listens for new user registrations and sends a new user registration
+    e-mail to administrators, if enabled.
+    """
+    siteconfig = SiteConfiguration.objects.get_current()
+
+    if siteconfig.get("mail_send_new_user_mail"):
+        mail_new_user(user)
+
+
 def connect_signals():
     review_request_published.connect(review_request_published_cb,
                                      sender=ReviewRequest)
     review_published.connect(review_published_cb, sender=Review)
     reply_published.connect(reply_published_cb, sender=Review)
+    user_registered.connect(user_registered_cb)
+
+
+def build_email_address(fullname, email):
+    if not fullname:
+        return email
+    else:
+        return u'"%s" <%s>' % (fullname, email)
 
 
 def get_email_address_for_user(u):
-    if not u.get_full_name():
-        return u.email
-    else:
-        return u'"%s" <%s>' % (u.get_full_name(), u.email)
+    return build_email_address(u.get_full_name(), u.email)
 
 
 def get_email_addresses_for_group(g):
@@ -77,36 +96,49 @@ def get_email_addresses_for_group(g):
 
 
 class SpiffyEmailMessage(EmailMultiAlternatives):
-    def __init__(self, subject, text_body, html_body, from_email, to, cc,
-                 in_reply_to, headers={}):
-        EmailMultiAlternatives.__init__(self, subject, text_body,
-                                        from_email, to, headers=headers)
+    """An EmailMessage subclass with improved header and message ID support.
+
+    This also knows about several headers (standard and variations),
+    including Sender/X-Sender, In-Reply-To/References, and Reply-To.
+
+    The generated Message-ID header from the e-mail can be accessed
+    through the :py:attr:`message_id` attribute after the e-mail is sent.
+    """
+    def __init__(self, subject, text_body, html_body, from_email, sender,
+                 to, cc, in_reply_to, headers={}):
+        headers = headers.copy()
+
+        if sender:
+            headers['Sender'] = sender
+            headers['X-Sender'] = sender
+
+        if in_reply_to:
+            headers['In-Reply-To'] = in_reply_to
+            headers['References'] = in_reply_to
+
+        headers['Reply-To'] = from_email
+
+        # Mark the mail as 'auto-generated' (according to RFC 3834) to
+        # hopefully avoid auto replies.
+        headers['Auto-Submitted'] = 'auto-generated'
+        headers['From'] = from_email
+
+        super(SpiffyEmailMessage, self).__init__(subject, text_body,
+                                                 settings.DEFAULT_FROM_EMAIL,
+                                                 to, headers=headers)
 
         self.cc = cc or []
-
-        self.in_reply_to = in_reply_to
         self.message_id = None
 
         self.attach_alternative(html_body, "text/html")
 
     def message(self):
         msg = super(SpiffyEmailMessage, self).message()
-
-        if self.cc:
-            msg['Cc'] = ','.join(self.cc)
-
-        if self.in_reply_to:
-            msg['In-Reply-To'] = self.in_reply_to
-            msg['References'] = self.in_reply_to
-
         self.message_id = msg['Message-ID']
-
         return msg
 
     def recipients(self):
-        """
-        Returns a list of all recipients of the e-mail.
-        """
+        """Returns a list of all recipients of the e-mail. """
         return self.to + self.bcc + self.cc
 
 
@@ -121,8 +153,11 @@ def send_review_mail(user, review_request, subject, in_reply_to,
 
     from_email = get_email_address_for_user(user)
 
-    recipients = set([from_email])
+    recipients = set()
     to_field = set()
+
+    if from_email:
+        recipients.add(from_email)
 
     if review_request.submitter.is_active:
         recipients.add(get_email_address_for_user(review_request.submitter))
@@ -151,6 +186,12 @@ def send_review_mail(user, review_request, subject, in_reply_to,
     context['domain'] = current_site.domain
     context['domain_method'] = domain_method
     context['review_request'] = review_request
+    context['MEDIA_URL'] = settings.MEDIA_URL
+    context['MEDIA_SERIAL'] = settings.MEDIA_SERIAL
+
+    if review_request.local_site:
+        context['local_site_name'] = review_request.local_site.name
+
     text_body = render_to_string(text_template_name, context)
     html_body = render_to_string(html_template_name, context)
 
@@ -168,11 +209,24 @@ def send_review_mail(user, review_request, subject, in_reply_to,
     headers = {
         'X-ReviewBoard-URL': base_url,
         'X-ReviewRequest-URL': base_url + review_request.get_absolute_url(),
+        'X-ReviewGroup': ', '.join(group.name for group in \
+                                    review_request.target_groups.all())
     }
 
+    sender = None
+
+    if settings.DEFAULT_FROM_EMAIL:
+        sender = build_email_address(user.get_full_name(),
+                                     settings.DEFAULT_FROM_EMAIL)
+
+        if sender == from_email:
+            # RFC 2822 states that we should only include Sender if the
+            # two are not equal.
+            sender = None
+
     message = SpiffyEmailMessage(subject.strip(), text_body, html_body,
-                                 from_email, list(to_field), list(cc_field),
-                                 in_reply_to, headers)
+                                 from_email, sender, list(to_field),
+                                 list(cc_field), in_reply_to, headers)
     try:
         message.send()
     except Exception, e:
@@ -203,7 +257,7 @@ def mail_review_request(user, review_request, changedesc=None):
     if not review_request.public or review_request.status == 'D':
         return
 
-    subject = u"Review Request: %s" % review_request.summary
+    subject = u"Review Request %d: %s" % (review_request.id, review_request.summary)
     reply_message_id = None
 
     if review_request.email_message_id:
@@ -253,7 +307,7 @@ def mail_review(user, review):
     review.email_message_id = \
         send_review_mail(user,
                          review_request,
-                         u"Re: Review Request: %s" % review_request.summary,
+                         u"Re: Review Request %d: %s" % (review_request.id, review_request.summary),
                          review_request.email_message_id,
                          None,
                          'notifications/review_email.txt',
@@ -288,7 +342,7 @@ def mail_reply(user, reply):
     reply.email_message_id = \
         send_review_mail(user,
                          review_request,
-                         u"Re: Review Request: %s" % review_request.summary,
+                         u"Re: Review Request %d: %s" % (review_request.id, review_request.summary),
                          review.email_message_id,
                          review.participants,
                          'notifications/reply_email.txt',
@@ -296,3 +350,35 @@ def mail_reply(user, reply):
                          extra_context)
     reply.time_emailed = datetime.now()
     reply.save()
+
+
+def mail_new_user(user):
+    """Sends an e-mail to administrators for newly registered users."""
+    current_site = Site.objects.get_current()
+    siteconfig = current_site.config.get_current()
+    domain_method = siteconfig.get("site_domain_method")
+    subject = "New Review Board user registration for %s" % user.username
+    from_email = get_email_address_for_user(user)
+
+    context = {
+        'domain': current_site.domain,
+        'domain_method': domain_method,
+        'user': user,
+        'user_url': reverse('admin:auth_user_change', args=(user.id,))
+    }
+
+    text_message = render_to_string('notifications/new_user_email.txt', context)
+    html_message = render_to_string('notifications/new_user_email.html',
+                                    context)
+
+    message = SpiffyEmailMessage(subject.strip(), text_message, html_message,
+                                 settings.SERVER_EMAIL, settings.SERVER_EMAIL,
+                                 [build_email_address(*a)
+                                  for a in settings.ADMINS], None, None)
+
+    try:
+        message.send()
+    except Exception, e:
+        logging.error("Error sending e-mail notification with subject '%s' on "
+                      "behalf of '%s' to admin: %s",
+                      subject.strip(), from_email, e, exc_info=1)
